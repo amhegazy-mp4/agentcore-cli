@@ -133,6 +133,22 @@ yourself.
 Note that `agentcore status` reports only the resources `agentcore.json`
 declares, not the ones you add in the stack.
 
+## China (aws-cn) regions
+
+`cn-north-1` and `cn-northwest-1` are supported, with three differences:
+
+- **Templates:** Amazon Bedrock, Anthropic, OpenAI, and Gemini are not accessible from China
+  regions, so templates wired to those providers (and `--type import`, which reads from Amazon
+  Bedrock) are rejected when a deployment target is in `cn-*`. Bring your own agent
+  implementation instead: scaffold with `agent-python-minimal` or `mcp-python-fastmcp` and add
+  your own model connectivity, or use `--template agent-python-strands --model-provider litellm
+--model-id <model>` with a [LiteLLM model](https://docs.litellm.ai/docs/providers) reachable
+  from China — no default model id is applied there.
+- `agentcore create` scaffolds before any deployment target exists, so these restrictions are
+  enforced at `agentcore add runtime` (and in the TUI), where targets are known.
+- **Telemetry** is always disabled when the ambient AWS region or any deployment target is a
+  China region.
+
 ## Documentation
 
 - [Amazon Bedrock AgentCore documentation](https://docs.aws.amazon.com/bedrock-agentcore/): service guides and API references.

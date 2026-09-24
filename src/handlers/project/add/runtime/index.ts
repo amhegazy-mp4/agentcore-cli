@@ -1,8 +1,9 @@
 import z from "zod";
 import { createHandler, flag, ProjectKey } from "../../../../router";
+import { isChinaRegion } from "../../../../core/partition";
 import type { AddProjectResourceConfig } from "../types";
 import { parseJsonFlag, parseTags } from "../../../utils";
-import { InputValidationError } from "../../../../errors";
+import { InputValidationError, RegionUnsupportedFeatureError } from "../../../../errors";
 import { AgentNameSchema, type EnvVar } from "../../../../projectSchemas/runtime";
 import { RuntimeAuthorizerTypeSchema } from "../../../../projectSchemas/auth";
 import { NetworkModeSchema } from "../../../../projectSchemas/constants";
@@ -73,8 +74,15 @@ export const createAddRuntimeHandler = (config: AddProjectResourceConfig) =>
       ),
       flag(
         "model-provider",
-        "model provider for supported templates (Bedrock, Anthropic, OpenAI, or Gemini)",
+        "model provider for supported templates (Bedrock, Anthropic, OpenAI, Gemini, or LiteLLM)",
         ModelProviderSchema.optional(),
+        { group: CONFIGURATION },
+      ),
+      flag(
+        "model-id",
+        "model id for the scaffolded Runtime code, overriding the provider's default " +
+          "(required with litellm in China regions)",
+        z.string().min(1).optional(),
         { group: CONFIGURATION },
       ),
       flag(
@@ -173,26 +181,22 @@ export const createAddRuntimeHandler = (config: AddProjectResourceConfig) =>
     ],
     handle: async (ctx, flags) => {
       const project = ctx.require(ProjectKey);
-      requireDeployedNameFits(
-        "Runtime",
-        project.name,
-        flags.name,
-        "_",
-        48,
-        await config.projectManager.listTargets(project),
-      );
+      const deploymentTargets = await config.projectManager.listTargets(project);
+      requireDeployedNameFits("Runtime", project.name, flags.name, "_", 48, deploymentTargets);
 
       const isImport = flags["type"] === "import";
       const isTemplate = flags["template"] !== undefined;
       const modelFlagsPresent =
-        flags["model-provider"] !== undefined || flags["api-key"] !== undefined;
+        flags["model-provider"] !== undefined ||
+        flags["model-id"] !== undefined ||
+        flags["api-key"] !== undefined;
 
       if (flags.framework !== undefined && !isImport) {
         throw new InputValidationError("--framework requires --type import");
       }
 
       if (isImport) {
-        const importIncompatibleFlags = (["model-provider", "api-key"] as const).filter(
+        const importIncompatibleFlags = (["model-provider", "model-id", "api-key"] as const).filter(
           (flagName) => flags[flagName] !== undefined,
         );
         if (isTemplate || importIncompatibleFlags.length > 0) {
@@ -210,12 +214,12 @@ export const createAddRuntimeHandler = (config: AddProjectResourceConfig) =>
       if (!isImport && modelFlagsPresent) {
         if (!isTemplate) {
           throw new InputValidationError(
-            "--model-provider and --api-key only apply to templates that support them",
+            "--model-provider, --model-id, and --api-key only apply to templates that support them",
           );
         }
         if (!RUNTIME_TEMPLATE_SHORTCUTS[flags.template!].supportsModelProviderOverride) {
           throw new InputValidationError(
-            `--model-provider and --api-key are not valid with the ${flags.template} template`,
+            `--model-provider, --model-id, and --api-key are not valid with the ${flags.template} template`,
           );
         }
       }
@@ -228,6 +232,14 @@ export const createAddRuntimeHandler = (config: AddProjectResourceConfig) =>
 
       let importBedrockAgent: ImportBedrockAgentInput | undefined;
       if (isImport) {
+        // The import path calls Amazon Bedrock, which is not available in the
+        // aws-cn partition — fail before any Bedrock call is made.
+        if (deploymentTargets.some((target) => isChinaRegion(target.region))) {
+          throw new RegionUnsupportedFeatureError(
+            "--type import translates a Bedrock Agent, and Amazon Bedrock is not available in " +
+              "China regions (cn-*).",
+          );
+        }
         importBedrockAgent = await resolveImportBedrockAgentInput({
           importer: config.bedrockAgentImporter,
           runtimeName,
@@ -252,6 +264,7 @@ export const createAddRuntimeHandler = (config: AddProjectResourceConfig) =>
           ? resolveRuntimeTemplateShortcut(flags.template!, {
               runtimeName: flags.name,
               modelProvider: flags["model-provider"],
+              modelId: flags["model-id"],
               apiKey,
             })
           : resolveRuntimeTemplateShortcut("agent-python-minimal", { runtimeName: flags.name });

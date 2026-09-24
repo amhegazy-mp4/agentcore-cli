@@ -7,13 +7,18 @@ import {
   DeserializationError,
   InputValidationError,
   ProjectStateError,
+  RegionUnsupportedFeatureError,
   ResourceNotFoundError,
 } from "../../errors/errors";
 import type { AwsDeploymentTarget } from "../../projectSchemas/aws-targets";
 import { credentialEnvVarName } from "../../projectSchemas/credential";
 import { ProjectSpecSchema } from "../../projectSchemas/project";
 import { ENV_LOCAL_RELATIVE_PATH } from "./envLocal";
-import { FsProjectManager } from "./manager";
+import {
+  FsProjectManager,
+  LITELLM_MODEL_ID_REQUIRED_CN_MESSAGE,
+  MODEL_PROVIDER_RUNTIMES_CN_MESSAGE,
+} from "./manager";
 import { resolveRuntimeTemplateShortcut } from "../../handlers/project/shortcuts";
 import {
   type AddResourceInput,
@@ -531,6 +536,151 @@ describe("FsProjectManager.addResource", () => {
       expect(await Bun.file(specPath).text()).toBe(specBefore);
     },
   );
+
+  // Model-provider templates are gated in the aws-cn partition: none of the
+  // template model providers are reachable there, so the add must fail before
+  // any scaffolding. Provider-free templates and commercial-only targets pass.
+  describe("China (aws-cn) deployment targets", () => {
+    const MCP_PYTHON_FASTMCP = resolveRuntimeTemplateShortcut("mcp-python-fastmcp");
+
+    async function projectWithTarget(region: string, missingToolAfterCreate?: string) {
+      const checkedTools: string[] = [];
+      let missingTool: string | undefined;
+      const subject = new FsProjectManager({
+        logger: createSilentLogger(),
+        identity: new TestIdentityClient(),
+        enableTransactionSearch: async () => {},
+        runner: async () => {},
+        checkTool: async (candidate: string) => {
+          checkedTools.push(candidate);
+          if (candidate === missingTool) throw new Error(`${candidate} is missing`);
+        },
+      });
+      const { project } = await runCreate(subject, {
+        name: "example",
+        scaffoldRuntimeInput: AGENT_PYTHON,
+        skipInstall: true,
+        skipGit: true,
+      });
+      await writeFile(
+        join(project.rootPath, "agentcore", "aws-targets.json"),
+        JSON.stringify([{ name: "primary", account: "111122223333", region }]),
+      );
+      missingTool = missingToolAfterCreate;
+      checkedTools.length = 0;
+      return { subject, project, checkedTools };
+    }
+
+    test("rejects a model-provider template before scaffolding", async () => {
+      await inTempDirectory();
+      const { subject, project, checkedTools } = await projectWithTarget("cn-north-1");
+      const runtimePath = join(project.rootPath, "app", "cn_blocked");
+
+      await expect(
+        runAdd(subject, project, {
+          resourceType: "runtime",
+          resourceConfig: {
+            name: "cn_blocked",
+            scaffoldRuntimeInput: { ...AGENT_PYTHON_STRANDS, runtimeName: "cn_blocked" },
+          },
+        }),
+      ).rejects.toThrow(new RegionUnsupportedFeatureError(MODEL_PROVIDER_RUNTIMES_CN_MESSAGE));
+
+      expect(checkedTools).toEqual([]);
+      expect(existsSync(runtimePath)).toBe(false);
+    });
+
+    test("lets a provider-free template past the partition gate", async () => {
+      await inTempDirectory();
+      const { subject, project } = await projectWithTarget("cn-north-1", "uv");
+
+      // The gate does not fire; the add proceeds to dependency checks.
+      await expect(
+        runAdd(subject, project, {
+          resourceType: "runtime",
+          resourceConfig: {
+            name: "cn_allowed",
+            scaffoldRuntimeInput: { ...MCP_PYTHON_FASTMCP, runtimeName: "cn_allowed" },
+          },
+        }),
+      ).rejects.toThrow("uv is missing");
+    });
+
+    test("lets the minimal skeleton past the partition gate despite its nominal provider", async () => {
+      await inTempDirectory();
+      const { subject, project } = await projectWithTarget("cn-north-1", "uv");
+
+      // agent-python-minimal carries modelProvider Bedrock in its shortcut but
+      // renders no model code (framework "none") — it is the BYO vehicle in CN.
+      await expect(
+        runAdd(subject, project, {
+          resourceType: "runtime",
+          resourceConfig: {
+            name: "cn_minimal",
+            scaffoldRuntimeInput: { ...AGENT_PYTHON, runtimeName: "cn_minimal" },
+          },
+        }),
+      ).rejects.toThrow("uv is missing");
+    });
+
+    test("requires an explicit model id for LiteLLM", async () => {
+      await inTempDirectory();
+      const { subject, project, checkedTools } = await projectWithTarget("cn-north-1");
+      const runtimePath = join(project.rootPath, "app", "cn_litellm");
+
+      await expect(
+        runAdd(subject, project, {
+          resourceType: "runtime",
+          resourceConfig: {
+            name: "cn_litellm",
+            scaffoldRuntimeInput: {
+              ...AGENT_PYTHON_STRANDS,
+              runtimeName: "cn_litellm",
+              modelProvider: "LiteLLM",
+            },
+          },
+        }),
+      ).rejects.toThrow(new RegionUnsupportedFeatureError(LITELLM_MODEL_ID_REQUIRED_CN_MESSAGE));
+
+      expect(checkedTools).toEqual([]);
+      expect(existsSync(runtimePath)).toBe(false);
+    });
+
+    test("lets LiteLLM with an explicit model id past the partition gate", async () => {
+      await inTempDirectory();
+      const { subject, project } = await projectWithTarget("cn-north-1", "uv");
+
+      await expect(
+        runAdd(subject, project, {
+          resourceType: "runtime",
+          resourceConfig: {
+            name: "cn_litellm_ok",
+            scaffoldRuntimeInput: {
+              ...AGENT_PYTHON_STRANDS,
+              runtimeName: "cn_litellm_ok",
+              modelProvider: "LiteLLM",
+              modelId: "openai/my-cn-reachable-model",
+            },
+          },
+        }),
+      ).rejects.toThrow("uv is missing");
+    });
+
+    test("lets a model-provider template through for commercial-only targets", async () => {
+      await inTempDirectory();
+      const { subject, project } = await projectWithTarget("us-west-2", "uv");
+
+      await expect(
+        runAdd(subject, project, {
+          resourceType: "runtime",
+          resourceConfig: {
+            name: "commercial",
+            scaffoldRuntimeInput: { ...AGENT_PYTHON_STRANDS, runtimeName: "commercial" },
+          },
+        }),
+      ).rejects.toThrow("uv is missing");
+    });
+  });
 });
 
 describe("FsProjectManager.build", () => {

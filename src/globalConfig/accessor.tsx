@@ -8,6 +8,7 @@ import type { ReadWriteJson } from "../io";
 import type { Logger } from "../logging";
 import { globalConfigFileSchema } from "./types";
 import { DEFAULT_GLOBAL_CONFIG, applyOverrides } from "./config";
+import { isChinaRegion } from "../core/partition";
 import z from "zod";
 import { InputValidationError } from "../errors";
 
@@ -63,7 +64,17 @@ export class DefaultGlobalConfigAccessor implements GlobalConfigAccessor {
       }
     }
 
-    this.cachedConfig = { ...applyOverrides(DEFAULT_GLOBAL_CONFIG, configFileData), isFirstRun };
+    // No telemetry collector exists in the aws-cn partition, so telemetry
+    // defaults to disabled there; an explicit telemetry.enabled in the config
+    // file still wins through applyOverrides.
+    const defaults = inChinaRegionEnv()
+      ? {
+          ...DEFAULT_GLOBAL_CONFIG,
+          telemetry: { ...DEFAULT_GLOBAL_CONFIG.telemetry, enabled: false },
+        }
+      : DEFAULT_GLOBAL_CONFIG;
+
+    this.cachedConfig = { ...applyOverrides(defaults, configFileData), isFirstRun };
     return this.cachedConfig;
   }
 
@@ -130,4 +141,9 @@ function diff<T extends Record<string, unknown>>(a: T, b: T): DeepPartial<T> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** True when the ambient AWS region env vars point at the aws-cn partition. */
+function inChinaRegionEnv(): boolean {
+  return isChinaRegion(process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "");
 }

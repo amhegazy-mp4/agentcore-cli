@@ -262,6 +262,7 @@ add a Runtime to the current project
 - `--template <template>`: a preset of flags for scaffolding the Runtime; compatible flags override preset values
 - `--framework <framework>`: agent framework for an imported Bedrock Agent: strands or langgraph (requires --type import)
 - `--model-provider <model-provider>`: model provider for the scaffolded Runtime code (Bedrock, Anthropic, OpenAI, or Gemini)
+- `--model-id <model-id>`: model id for the scaffolded Runtime code, overriding the provider's default (required with litellm in China regions)
 - `--api-key <api-key>`: API key for non-Bedrock providers: '-' for stdin, 'file://path' for file
 - `--role-arn <role-arn>`: IAM role ARN that provides permissions for the Runtime
 - `--additional-policies <additional-policies...>`: additional IAM policy ARNs or policy document paths for the execution role

@@ -1,0 +1,81 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { isChinaContext, isChinaRegion } from "./partition";
+
+describe("isChinaRegion", () => {
+  test.each(["cn-north-1", "cn-northwest-1"])("returns true for %s", (region) => {
+    expect(isChinaRegion(region)).toBe(true);
+  });
+
+  test.each(["us-east-1", "eu-west-1", "us-gov-west-1", ""])("returns false for %j", (region) => {
+    expect(isChinaRegion(region)).toBe(false);
+  });
+});
+
+describe("isChinaContext", () => {
+  let savedRegion: string | undefined;
+  let savedDefaultRegion: string | undefined;
+  let directory: string;
+
+  beforeEach(async () => {
+    savedRegion = process.env.AWS_REGION;
+    savedDefaultRegion = process.env.AWS_DEFAULT_REGION;
+    delete process.env.AWS_REGION;
+    delete process.env.AWS_DEFAULT_REGION;
+    directory = await mkdtemp(join(tmpdir(), "agentcore-partition-"));
+  });
+
+  afterEach(async () => {
+    if (savedRegion === undefined) delete process.env.AWS_REGION;
+    else process.env.AWS_REGION = savedRegion;
+    if (savedDefaultRegion === undefined) delete process.env.AWS_DEFAULT_REGION;
+    else process.env.AWS_DEFAULT_REGION = savedDefaultRegion;
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  async function projectWithTargets(targets: unknown): Promise<string> {
+    const root = join(directory, "project");
+    await mkdir(join(root, "agentcore"), { recursive: true });
+    await writeFile(join(root, "agentcore", "agentcore.json"), "{}");
+    if (targets !== undefined) {
+      await writeFile(join(root, "agentcore", "aws-targets.json"), JSON.stringify(targets));
+    }
+    return root;
+  }
+
+  test("true when the ambient region env var is a China region", async () => {
+    process.env.AWS_REGION = "cn-northwest-1";
+    expect(await isChinaContext(directory)).toBe(true);
+  });
+
+  test("true when the enclosing project declares a China deployment target", async () => {
+    const root = await projectWithTargets([
+      { name: "primary", account: "111122223333", region: "us-west-2" },
+      { name: "china", account: "111122223333", region: "cn-north-1" },
+    ]);
+    expect(await isChinaContext(root)).toBe(true);
+    // The walk finds the project from a nested path as well.
+    expect(await isChinaContext(join(root, "app", "nested"))).toBe(true);
+  });
+
+  test("false for a project with only commercial targets", async () => {
+    const root = await projectWithTargets([
+      { name: "primary", account: "111122223333", region: "us-west-2" },
+    ]);
+    expect(await isChinaContext(root)).toBe(false);
+  });
+
+  test("false when no project encloses the directory", async () => {
+    expect(await isChinaContext(directory)).toBe(false);
+  });
+
+  test("false when the targets file is missing or malformed", async () => {
+    const noTargets = await projectWithTargets(undefined);
+    expect(await isChinaContext(noTargets)).toBe(false);
+
+    await writeFile(join(noTargets, "agentcore", "aws-targets.json"), "not json");
+    expect(await isChinaContext(noTargets)).toBe(false);
+  });
+});

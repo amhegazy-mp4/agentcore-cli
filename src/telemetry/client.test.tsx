@@ -433,6 +433,44 @@ describe("OtelHistogramSink", () => {
     expect(await readFile(auditFilePath, "utf8")).toContain("cli.command_run");
     await rm(auditFilePath, { force: true });
   });
+
+  test("a China region suppresses network export even when telemetry is enabled", async () => {
+    const auditFilePath = join(tmpdir(), `cn-disabled-audit-${crypto.randomUUID()}.jsonl`);
+    const globalConfigAccessor = new TestGlobalConfigAccessor({
+      initialConfigData: {
+        ...DEFAULT_GLOBAL_CONFIG,
+        telemetry: {
+          enabled: true,
+          audit: true,
+          endpoint: `http://localhost:${testCollector.port}`,
+        },
+      },
+    });
+
+    const savedRegion = process.env.AWS_REGION;
+    process.env.AWS_REGION = "cn-north-1";
+    try {
+      const client = new DefaultTelemetryClient({
+        logger,
+        sessionId: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+        globalConfigAccessor,
+        auditFilePath,
+      });
+      const event = client.createMetricEvent("cli.command_run", {
+        exit_reason: "success",
+        command_path: "/agentcore",
+      });
+      await event.emit(100);
+      await client.shutdown();
+    } finally {
+      if (savedRegion === undefined) delete process.env.AWS_REGION;
+      else process.env.AWS_REGION = savedRegion;
+    }
+
+    expect(receivedBodies).toHaveLength(0);
+    expect(await readFile(auditFilePath, "utf8")).toContain("cli.command_run");
+    await rm(auditFilePath, { force: true });
+  });
 });
 
 describe("resourceAttributesSchema", () => {

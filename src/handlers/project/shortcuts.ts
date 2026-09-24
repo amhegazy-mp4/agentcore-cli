@@ -228,6 +228,7 @@ export function formatTemplateParameterHelp(options?: { includeEmpty?: boolean }
 type RuntimeTemplateOverrides = {
   runtimeName?: string;
   modelProvider?: ModelProvider;
+  modelId?: string;
   apiKey?: string;
 };
 
@@ -247,6 +248,7 @@ export function resolveRuntimeTemplateShortcut(
     modelProvider: template.supportsModelProviderOverride
       ? (overrides?.modelProvider ?? template.modelProvider)
       : template.modelProvider,
+    ...(overrides?.modelId !== undefined && { modelId: overrides.modelId }),
     ...(overrides?.apiKey !== undefined && { apiKey: overrides.apiKey }),
     ...(template.includesMemory && { memory: getDefaultMemorySpec(runtimeName) }),
     runtimeVersion: template.runtimeVersion,

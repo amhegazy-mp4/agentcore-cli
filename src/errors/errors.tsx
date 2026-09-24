@@ -88,6 +88,17 @@ export class InputValidationError extends AgentCoreCLIError {
   }
 }
 
+/**
+ * Error raised when a feature is not available in the AWS partition of the
+ * target region (e.g. model-provider templates or Bedrock-backed features in
+ * the aws-cn partition).
+ */
+export class RegionUnsupportedFeatureError extends AgentCoreCLIError {
+  constructor(message?: string, options?: Omit<AgentCoreCLIErrorOptions, "source">) {
+    super(message, { ...options, source: ERROR_SOURCE.USER });
+  }
+}
+
 /** Error raised when valid user input references a resource that does not exist. */
 export class ResourceNotFoundError extends AgentCoreCLIError {
   constructor(message?: string, options?: Omit<AgentCoreCLIErrorOptions, "source">) {

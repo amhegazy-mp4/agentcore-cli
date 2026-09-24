@@ -66,6 +66,7 @@ export const ScaffoldRuntimeInputSchema = z
     framework: z.enum(["strands", "langchain", "vercelai", "none"]),
     protocol: ProtocolModeSchema.optional(),
     modelProvider: ModelProviderSchema.optional(),
+    modelId: z.string().min(1).optional(),
     apiKey: z.string().min(1).optional(),
     memory: MemorySchema.optional(),
     runtimeVersion: RuntimeVersionSchema.optional(),

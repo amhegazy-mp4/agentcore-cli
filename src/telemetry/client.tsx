@@ -15,6 +15,7 @@ import { FileSystemSink } from "./fileSystemSink";
 import path from "path";
 import { OtelHistogramSink } from "./otelSink";
 import { PACKAGE_VERSION } from "../constants";
+import { isChinaContext } from "../core/partition";
 
 export type DefaultTelemetryClientConfig = {
   logger: Logger;
@@ -87,7 +88,11 @@ export class DefaultTelemetryClient implements TelemetryClient {
         }),
       );
 
-    if (globalConfig.telemetry.enabled && !telemetryDisabledByEnv())
+    // Telemetry is unconditionally disabled in a China (aws-cn) context —
+    // regardless of config or endpoint overrides — to comply with the
+    // restrictions on sending telemetry out of the region. The audit file sink
+    // above is unaffected (it only writes locally).
+    if (globalConfig.telemetry.enabled && !telemetryDisabledByEnv() && !(await isChinaContext()))
       metricSinks.push(
         new OtelHistogramSink({
           logger: this.logger.child({ module: "otelCollectorSink" }),

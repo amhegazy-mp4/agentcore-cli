@@ -72,8 +72,10 @@ import {
   MalformedServiceResponseError,
   NotImplementedError,
   ProjectStateError,
+  RegionUnsupportedFeatureError,
   ResourceNotFoundError,
 } from "../../errors/errors";
+import { isChinaRegion } from "../partition";
 import z from "zod";
 import { CdkBackend, type TransactionSearchEnabler } from "./backends/cdk";
 import { resolveAwsAccount } from "./backends/cdk/environment";
@@ -95,6 +97,28 @@ const TARGETS_EXAMPLE = '[{ "name": "default", "account": "111122223333", "regio
 
 const NODE_INSTALL_HINT = "Install Node.js: https://nodejs.org/";
 const UV_INSTALL_HINT = "Install uv: https://docs.astral.sh/uv/getting-started/installation/";
+
+/**
+ * Shown when a runtime template hardwired to an unreachable model provider
+ * targets a China (aws-cn) region. Amazon Bedrock, Anthropic, OpenAI, and
+ * Gemini cannot be called from cn-*; LiteLLM can route to a reachable provider.
+ */
+export const MODEL_PROVIDER_RUNTIMES_CN_MESSAGE =
+  "This template's model provider is not accessible from China regions (cn-*): Amazon Bedrock, " +
+  "Anthropic, OpenAI, and Gemini cannot be used there. Either scaffold a provider-free runtime " +
+  "(--template agent-python-minimal or mcp-python-fastmcp) and bring your own model connectivity, " +
+  "or use --template agent-python-strands --model-provider litellm --model-id <model reachable " +
+  "from China>.";
+
+/**
+ * Shown when a LiteLLM runtime template targets a China (aws-cn) region without
+ * an explicit model id: the LiteLLM default routes to Amazon Bedrock, which is
+ * not available there.
+ */
+export const LITELLM_MODEL_ID_REQUIRED_CN_MESSAGE =
+  "--model-provider litellm requires --model-id in China regions (cn-*): the default model id " +
+  "routes to Amazon Bedrock, which is not available there. Pass a LiteLLM model id for a " +
+  "provider reachable from China (see https://docs.litellm.ai/docs/providers).";
 const GIT_INSTALL_HINT = "Install git: https://git-scm.com/downloads";
 
 // npm prints nothing until it exits when stderr is piped, and its HTTP log is the only per-package
@@ -361,6 +385,25 @@ export class FsProjectManager implements ProjectManager {
         break;
       }
       case "runtime": {
+        // Framework templates render model-provider client code, which cannot
+        // reach Bedrock/Anthropic/OpenAI/Gemini from the aws-cn partition;
+        // reject before any scaffolding when a deployment target is in a China
+        // region. LiteLLM can route to a reachable provider, but only with an
+        // explicit model id (its default routes to Bedrock). Provider-free
+        // scaffolds (framework "none": minimal, MCP) stay available as the
+        // bring-your-own-implementation path.
+        if (input.resourceConfig.scaffoldRuntimeInput.framework !== "none") {
+          const targets = await this.listTargets(project);
+          if (targets.some((target) => isChinaRegion(target.region))) {
+            const { modelProvider, modelId } = input.resourceConfig.scaffoldRuntimeInput;
+            if ((modelProvider ?? "Bedrock") !== "LiteLLM") {
+              throw new RegionUnsupportedFeatureError(MODEL_PROVIDER_RUNTIMES_CN_MESSAGE);
+            }
+            if (modelId === undefined) {
+              throw new RegionUnsupportedFeatureError(LITELLM_MODEL_ID_REQUIRED_CN_MESSAGE);
+            }
+          }
+        }
         await this.checkRuntimeDependency(input.resourceConfig.scaffoldRuntimeInput);
         yield { type: "step", message: "Scaffolding runtime in project" };
         const outputPath = join(project.rootPath, "app", input.resourceConfig.name);

@@ -13,6 +13,7 @@ export {
   NotImplementedError,
   ProjectFileExistsError,
   ProjectStateError,
+  RegionUnsupportedFeatureError,
   ResourceNotFoundError,
   ResultTruncationError,
   RuntimeInvokeResponseError,
