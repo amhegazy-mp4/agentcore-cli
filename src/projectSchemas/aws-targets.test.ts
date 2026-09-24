@@ -54,6 +54,8 @@ describe("AWS deployment targets", () => {
     "ap-south-2",
     "ap-southeast-5",
     "ap-southeast-7",
+    "cn-north-1",
+    "cn-northwest-1",
     "eu-south-1",
     "eu-south-2",
     "us-gov-west-1",

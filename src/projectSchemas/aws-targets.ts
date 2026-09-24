@@ -13,6 +13,8 @@ export const AgentCoreRegionSchema = z.enum([
   "ap-southeast-5",
   "ap-southeast-7",
   "ca-central-1",
+  "cn-north-1",
+  "cn-northwest-1",
   "eu-central-1",
   "eu-north-1",
   "eu-south-1",
