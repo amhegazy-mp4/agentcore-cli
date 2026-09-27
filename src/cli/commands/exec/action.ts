@@ -353,7 +353,7 @@ export async function handleShellSession(ctx: ExecContext, options: ExecOptions)
       }
     };
 
-    const cleanup = (code: number | null) => {
+    const cleanup = (code: number | null, transportFailure = false) => {
       stopKeepalive();
 
       if (process.stdin.isTTY) {
@@ -392,8 +392,13 @@ export async function handleShellSession(ctx: ExecContext, options: ExecOptions)
         detached,
       };
 
-      // null = server closed WS without STATUS frame (treat as clean); signal exits (>=128) are also normal
-      if (code === 0 || code === null || (code !== null && code >= 128)) {
+      if (transportFailure) {
+        resolve({
+          success: false,
+          error: new Error('Shell connection closed unexpectedly before the shell reported an exit status'),
+          ...sessionMeta,
+        });
+      } else if (code === 0 || code === null || (code !== null && code >= 128)) {
         resolve({ success: true, ...sessionMeta });
       } else {
         resolve({
@@ -462,13 +467,11 @@ export async function handleShellSession(ctx: ExecContext, options: ExecOptions)
       // The STATUS termination frame is the authoritative exit signal — when it arrived, use its
       // exit code regardless of the WebSocket close code.
       //
-      // Without a STATUS frame, fall back to the WebSocket close code. connectShell now resolves as
-      // soon as the socket opens (the 0x03 confirmation-frame wait was removed), so an abnormal
-      // close such as 1006 can occur before the shell is usable. Only code 1000 (normal closure —
-      // the server's deliberate close after a clean shell exit) counts as success; any other code
-      // is a real failure and must not be reported as exit 0. Kick (4000) stays null so cleanup
-      // prints the reconnect hint instead of a spurious exit line.
+      // Without a STATUS frame, code 1000 is a clean shell exit and code 4000 is a kicked session.
+      // Any other close is a transport failure: the shell may still be available, so preserve the
+      // unset exit code and print the reconnect hint rather than misreporting shell exit code 1.
       let resolvedExitCode: number | null;
+      let transportFailure = false;
       if (exitCode !== null) {
         resolvedExitCode = exitCode;
       } else if (code === 1000) {
@@ -476,9 +479,10 @@ export async function handleShellSession(ctx: ExecContext, options: ExecOptions)
       } else if (code === 4000) {
         resolvedExitCode = null;
       } else {
-        resolvedExitCode = 1;
+        resolvedExitCode = null;
+        transportFailure = true;
       }
-      cleanup(resolvedExitCode);
+      cleanup(resolvedExitCode, transportFailure);
     });
 
     ws.on('error', (err: Error) => {

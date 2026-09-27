@@ -1207,11 +1207,10 @@ describe('handleShellSession WS close code 1000 → clean exit', () => {
     expect(stderrData).not.toMatch(/disconnected/);
   });
 
-  it('resolves success:false with exitCode 1 when WS closes with abnormal code 1006 and no STATUS frame', async () => {
+  it('reports an abnormal close as a transport failure and prints a reconnect hint', async () => {
     // connectShell now resolves as soon as the socket opens (the 0x03 confirmation-frame wait was
-    // removed), so an abnormal close such as 1006 can happen before the shell is usable. Without a
-    // STATUS termination frame, only code 1000 counts as a clean exit — any other code is a real
-    // failure and must NOT be reported as exit 0.
+    // removed), so an abnormal close such as 1006 can happen before the shell is usable. It is not
+    // a shell exit code: preserve exitCode as null so the user receives a reconnect command.
     const handlers2: Record<string, ((...args: unknown[]) => void)[]> = {};
     const fire2 = (event: string, ...args: unknown[]) => handlers2[event]?.forEach(fn => fn(...args));
     const mockWs2 = {
@@ -1241,8 +1240,12 @@ describe('handleShellSession WS close code 1000 → clean exit', () => {
     const result = await sessionPromise;
 
     expect(result.success).toBe(false);
-    // exitCode is 1: abnormal close with no STATUS termination frame → treated as a failure
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBeNull();
+    expect(!result.success && result.error.message).toMatch(/closed unexpectedly/);
+    const stderrData = (stderrSpy.mock.calls as [unknown][]).map(c => String(c[0])).join('');
+    expect(stderrData).toMatch(/\[disconnected\]/);
+    expect(stderrData).toMatch(/to reconnect/);
+    expect(stderrData).not.toMatch(/session closed/);
   });
 });
 
