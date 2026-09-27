@@ -398,7 +398,7 @@ export async function handleShellSession(ctx: ExecContext, options: ExecOptions)
           error: new Error('Shell connection closed unexpectedly before the shell reported an exit status'),
           ...sessionMeta,
         });
-      } else if (code === 0 || code === null || (code !== null && code >= 128)) {
+      } else if (code === 0 || code === null || code >= 128) {
         resolve({ success: true, ...sessionMeta });
       } else {
         resolve({
