@@ -125,18 +125,26 @@ export interface AgentRenderConfig {
 
   /** True when agentcore_browser tool is present and allowed */
   hasBrowser?: boolean;
+  /** Configured Harness namespace for the browser tool (export path). */
+  browserToolName?: string;
   /** Env var holding the custom browser identifier, injected by the browser connection at deploy.
    *  Undefined when the AWS-managed default browser is used (no custom ARN). */
   browserIdentifierEnvVar?: string;
   /** True when agentcore_code_interpreter tool is present and allowed */
   hasCodeInterpreter?: boolean;
+  /** Configured Harness namespace for the code-interpreter tool (export path). */
+  codeInterpreterToolName?: string;
   /** Env var holding the custom code-interpreter identifier, injected by the connection at deploy.
    *  Undefined when the AWS-managed default is used (no custom ARN). */
   codeInterpreterIdentifierEnvVar?: string;
-  /** True when the builtin shell tool is enabled (export harness only) */
-  hasShell?: boolean;
-  /** True when the builtin file_operations tool is enabled (export harness only) */
-  hasFileOperations?: boolean;
+  /** Strands Harness built-in tools selected by the allowedTools policy (export harness only). */
+  harnessBuiltinTools?: ('shell' | 'read' | 'write' | 'edit' | 'web_fetch')[];
+  /** Strands Harness built-in plugins selected by the allowedTools policy (export harness only). */
+  harnessBuiltinPlugins?: 'todos'[];
+  /** Whether the Strands Harness context-offloader plugin is selected (export harness only). */
+  hasHarnessContextOffloader?: boolean;
+  /** Whether the managed one-level subagent tool is selected (export harness only). */
+  hasHarnessSubagent?: boolean;
   /** True when any execution limit is configured */
   hasExecutionLimits?: boolean;
 

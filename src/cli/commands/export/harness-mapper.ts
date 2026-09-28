@@ -379,21 +379,36 @@ function buildToolsRenderConfig(
   AgentRenderConfig,
   | 'inlineFunctionTools'
   | 'hasBrowser'
+  | 'browserToolName'
   | 'browserIdentifierEnvVar'
   | 'hasCodeInterpreter'
+  | 'codeInterpreterToolName'
   | 'codeInterpreterIdentifierEnvVar'
-  | 'hasShell'
-  | 'hasFileOperations'
+  | 'harnessBuiltinTools'
+  | 'harnessBuiltinPlugins'
+  | 'hasHarnessContextOffloader'
+  | 'hasHarnessSubagent'
 > {
+  const fileOperationsAllowed = isBuiltinIncluded('file_operations', allowedToolPatterns);
+  const harnessBuiltinTools: NonNullable<AgentRenderConfig['harnessBuiltinTools']> = [];
+  if (isBuiltinIncluded('shell', allowedToolPatterns)) harnessBuiltinTools.push('shell');
+  if (fileOperationsAllowed || isBuiltinIncluded('read', allowedToolPatterns)) harnessBuiltinTools.push('read');
+  if (fileOperationsAllowed || isBuiltinIncluded('write', allowedToolPatterns)) harnessBuiltinTools.push('write');
+  if (fileOperationsAllowed || isBuiltinIncluded('edit', allowedToolPatterns)) harnessBuiltinTools.push('edit');
+  if (isBuiltinIncluded('web_fetch', allowedToolPatterns)) harnessBuiltinTools.push('web_fetch');
+
   return {
     inlineFunctionTools: resolveInlineFunctionTools(spec, allowedToolPatterns),
     hasBrowser: toolResult.hasBrowser,
+    browserToolName: toolResult.browserToolName,
     browserIdentifierEnvVar: toolResult.browserIdentifierEnvVar,
     hasCodeInterpreter: toolResult.hasCodeInterpreter,
+    codeInterpreterToolName: toolResult.codeInterpreterToolName,
     codeInterpreterIdentifierEnvVar: toolResult.codeInterpreterIdentifierEnvVar,
-    // Builtin tools — always available in the Harness runtime, included unless filtered out by allowedTools
-    hasShell: isBuiltinIncluded('shell', allowedToolPatterns),
-    hasFileOperations: isBuiltinIncluded('file_operations', allowedToolPatterns),
+    harnessBuiltinTools,
+    harnessBuiltinPlugins: isBuiltinIncluded('todos', allowedToolPatterns) ? ['todos'] : [],
+    hasHarnessContextOffloader: isBuiltinIncluded('context_offloader', allowedToolPatterns),
+    hasHarnessSubagent: isBuiltinIncluded('subagent', allowedToolPatterns),
   };
 }
 
@@ -1074,9 +1089,12 @@ function resolveTruncationConfig(truncation: HarnessTruncationConfig | undefined
 }
 
 function isBuiltinIncluded(builtinName: string, patterns: string[]): boolean {
-  // Mirrors Harness runtime: builtins are keyed as "builtin/<name>", so only @builtin or @builtin/<name> patterns match.
-  // Plain "shell" does NOT match the "builtin/shell" builtin (it would match a tool literally named "shell").
-  return matchesAllowedTools(`builtin/${builtinName}`, patterns);
+  if (patterns.includes('*')) return true;
+  // Mirrors the managed Harness runtime: an unqualified pattern is matched against builtin names,
+  // while @builtin and @builtin/<name> use the explicit namespace.
+  return patterns.some(pattern =>
+    pattern.startsWith('@') ? matchesAllowedTools(`builtin/${builtinName}`, [pattern]) : fnmatch(pattern, builtinName)
+  );
 }
 
 /**
@@ -1089,8 +1107,12 @@ interface BrowserCodeInterpreterResult {
   connections: Connection[];
   /** True when the browser tool is included AND the build can run it (Container). */
   hasBrowser: boolean;
+  /** Configured Harness tool namespace used for collision disambiguation. */
+  browserToolName?: string;
   /** True when the code-interpreter tool is included. */
   hasCodeInterpreter: boolean;
+  /** Configured Harness tool namespace used for collision disambiguation. */
+  codeInterpreterToolName?: string;
   /** Discovery env var the generated code reads for the browser identifier (custom ARN only). */
   browserIdentifierEnvVar?: string;
   /** Discovery env var the generated code reads for the code-interpreter identifier (custom ARN only). */
@@ -1127,6 +1149,7 @@ function resolveBrowserCodeInterpreterConnections(
       });
     } else {
       result.hasBrowser = true;
+      result.browserToolName = spec.tools.find(tool => tool.type === 'agentcore_browser')?.name ?? 'browser';
       const rawArn = extractRawToolArn(spec, 'agentcore_browser', 'agentCoreBrowser', 'browserArn');
       const arn = validToolArn(rawArn, 'browser');
       if (arn) {
@@ -1145,6 +1168,8 @@ function resolveBrowserCodeInterpreterConnections(
 
   if (isToolIncluded('agentcore_code_interpreter', spec, allowedToolPatterns)) {
     result.hasCodeInterpreter = true;
+    result.codeInterpreterToolName =
+      spec.tools.find(tool => tool.type === 'agentcore_code_interpreter')?.name ?? 'code_interpreter';
     const rawArn = extractRawToolArn(
       spec,
       'agentcore_code_interpreter',

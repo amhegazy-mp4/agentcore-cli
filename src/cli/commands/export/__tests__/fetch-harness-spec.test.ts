@@ -376,6 +376,35 @@ describe('mapApiHarnessToSpec', () => {
   });
 });
 
+describe('fetchHarnessSpecByArn — service-resolved configuration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('exports the effective declarative values returned by GetHarness', async () => {
+    const arn = 'arn:aws:bedrock-agentcore:us-east-1:111122223333:harness/h-123';
+    mockGetHarness.mockResolvedValue({
+      harness: makeApiHarness({
+        model: { bedrockModelConfig: { modelId: 'service-resolved-model' } },
+        systemPrompt: [{ text: 'Service-resolved prompt.' }],
+        truncation: { strategy: 'sliding_window', config: { slidingWindow: { messagesCount: 18 } } },
+        maxIterations: 24,
+      }),
+    });
+
+    const { spec, systemPrompt } = await fetchHarnessSpecByArn(arn, 'us-east-1');
+
+    expect(mockGetHarness).toHaveBeenCalledWith({ region: 'us-east-1', harnessId: 'h-123' });
+    expect(spec.model).toEqual({ provider: 'bedrock', modelId: 'service-resolved-model' });
+    expect(systemPrompt).toBe('Service-resolved prompt.');
+    expect(spec.truncation).toEqual({
+      strategy: 'sliding_window',
+      config: { slidingWindow: { messagesCount: 18 } },
+    });
+    expect(spec.maxIterations).toBe(24);
+  });
+});
+
 describe('fetchHarnessSpecByArn — VPC vpcId resolution', () => {
   beforeEach(() => {
     vi.clearAllMocks();

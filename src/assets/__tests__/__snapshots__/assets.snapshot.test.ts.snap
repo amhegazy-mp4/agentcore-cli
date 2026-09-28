@@ -907,6 +907,8 @@ exports[`Assets Directory Snapshots > File listing > should match the expected f
   "python/http/strands/base/pyproject.toml",
   "python/http/strands/base/skills/fetcher.py",
   "python/http/strands/capabilities/execution-limits/hooks/execution_limits.py",
+  "python/http/strands/capabilities/harness/harness_runtime/__init__.py",
+  "python/http/strands/capabilities/harness/harness_runtime/managed.py",
   "python/http/strands/capabilities/memory/__init__.py",
   "python/http/strands/capabilities/memory/session.py",
   "python/http/strands/capabilities/payments/__init__.py",
@@ -5457,7 +5459,17 @@ import json
 from strands.tools.tools import PythonAgentTool
 from strands.types.tools import ToolResult, ToolUse
 {{/if}}
+{{#if isExportHarness}}
+from strands_harness import create_harness
+from harness_runtime import (
+    ManagedToolEntry,
+    ManagedToolProvider,
+    build_managed_builtin_tools,
+    create_context_offloader,
+)
+{{else}}
 from strands import Agent, tool
+{{/if}}
 {{#if hasSkillsFetcher}}
 from strands import AgentSkills
 {{#if hasFetchedSkills}}
@@ -5468,12 +5480,6 @@ from bedrock_agentcore.services.identity import IdentityClient
 {{/if}}
 {{/if}}
 import asyncio
-{{#if hasShell}}
-import subprocess
-{{/if}}
-{{#if hasFileOperations}}
-import os
-{{/if}}
 {{#if hasExecutionLimits}}
 from strands.tools.executors import SequentialToolExecutor
 from strands.types.exceptions import EventLoopException
@@ -5517,33 +5523,15 @@ from mcp_client.client import get_streamable_http_mcp_client
 {{#if hasMemory}}
 from memory.session import get_memory_session_manager
 {{/if}}
-{{#unless hasFileOperations}}
 {{#if (or needsOs browserIdentifierEnvVar codeInterpreterIdentifierEnvVar (some gitSkills "credentialArn"))}}
 import os
 {{/if}}
-{{/unless}}
 {{#if hasPayment}}
 from capabilities.payments.payments import create_payments_plugin, PAYMENT_SYSTEM_PROMPT
 {{/if}}
 
 app = BedrockAgentCoreApp()
 log = app.logger
-
-{{#if (or hasGateway remoteMcpTools)}}
-# Define MCP clients for all configured MCP servers (gateways and/or remote MCP)
-mcp_clients = []
-{{#if hasGateway}}
-mcp_clients += get_all_gateway_mcp_clients()
-{{/if}}
-{{#if remoteMcpTools}}
-mcp_clients += get_all_remote_mcp_clients()
-{{/if}}
-{{else}}
-{{#unless isExportHarness}}
-# Define a Streamable HTTP MCP Client
-mcp_clients = [get_streamable_http_mcp_client()]
-{{/unless}}
-{{/if}}
 
 {{#if systemPromptText}}
 DEFAULT_SYSTEM_PROMPT = """{{escapePyStr systemPromptText}}"""
@@ -5566,6 +5554,14 @@ DEFAULT_TOOL_DESC = "Return the sum of two numbers"
 # Define a collection of tools used by the model
 tools = []
 
+{{#if isExportHarness}}
+def _add_tool(tool: Any, namespace: str, tool_type: str) -> None:
+    tools.append(ManagedToolEntry(namespace, tool_type, tool))
+{{else}}
+def _add_tool(tool: Any, namespace: str, tool_type: str) -> None:
+    tools.append(tool)
+{{/if}}
+
 {{#if inlineFunctionTools}}
 # Inline function tools — stop the agent loop so the tool call streams back to the caller
 def _make_inline_tool(name: str, spec: dict) -> PythonAgentTool:
@@ -5581,7 +5577,7 @@ _INLINE_SPEC_{{snakeCase name}} = {
     "description": {{safeJson description}},
     "inputSchema": {"json": json.loads({{pyJsonStr inputSchema}}) },
 }
-tools.append(_make_inline_tool("{{name}}", _INLINE_SPEC_{{snakeCase name}}))
+_add_tool(_make_inline_tool("{{name}}", _INLINE_SPEC_{{snakeCase name}}), "{{name}}", "inline_function")
 {{/each}}
 
 _INLINE_FUNCTION_NAMES = { {{#each inlineFunctionTools}}"{{name}}"{{#unless @last}}, {{/unless}}{{/each}} }
@@ -5599,126 +5595,37 @@ _INLINE_FUNCTION_NAMES = set()
 def add_numbers(a: int, b: int) -> int:
     """Return the sum of two numbers"""
     return a+b
-tools.append(add_numbers)
+_add_tool(add_numbers, "builtin", "builtin")
 
 {{/unless}}
 {{/if}}
 {{#if hasBrowser}}
 {{#if browserIdentifierEnvVar}}
 _browser_id = os.getenv("{{browserIdentifierEnvVar}}")
-tools.append(AgentCoreBrowser(**({"identifier": _browser_id} if _browser_id else {})).browser)
+_add_tool(
+    AgentCoreBrowser(**({"identifier": _browser_id} if _browser_id else {})).browser,
+    "{{browserToolName}}",
+    "agentcore_browser",
+)
 {{else}}
-tools.append(AgentCoreBrowser().browser)
+_add_tool(AgentCoreBrowser().browser, "{{browserToolName}}", "agentcore_browser")
 {{/if}}
 {{/if}}
 {{#if hasCodeInterpreter}}
 {{#if codeInterpreterIdentifierEnvVar}}
 _code_interpreter_id = os.getenv("{{codeInterpreterIdentifierEnvVar}}")
-tools.append(AgentCoreCodeInterpreter(**({"identifier": _code_interpreter_id} if _code_interpreter_id else {})).code_interpreter)
+_add_tool(
+    AgentCoreCodeInterpreter(**({"identifier": _code_interpreter_id} if _code_interpreter_id else {})).code_interpreter,
+    "{{codeInterpreterToolName}}",
+    "agentcore_code_interpreter",
+)
 {{else}}
-tools.append(AgentCoreCodeInterpreter().code_interpreter)
+_add_tool(
+    AgentCoreCodeInterpreter().code_interpreter,
+    "{{codeInterpreterToolName}}",
+    "agentcore_code_interpreter",
+)
 {{/if}}
-{{/if}}
-{{#if hasShell}}
-@tool
-def shell(command: str, timeout: int = 300) -> dict:
-    """Execute a bash command and return the results.
-
-    Args:
-        command: The bash command to execute
-        timeout: Timeout in seconds (default: 300)
-
-    Returns:
-        Dict with stdout, stderr, and exit_code
-    """
-    result = subprocess.run(
-        command, shell=True, capture_output=True, text=True, timeout=timeout
-    )
-    return {"stdout": result.stdout, "stderr": result.stderr, "exit_code": result.returncode}
-
-tools.append(shell)
-{{/if}}
-{{#if hasFileOperations}}
-@tool
-def file_operations(
-    command: str,
-    path: str,
-    old_str: str = None,
-    new_str: str = None,
-    file_text: str = None,
-    insert_line: int = None,
-    view_range: list = None,
-) -> str:
-    """Text editor tool for viewing and modifying files.
-
-    Args:
-        command: The command to execute ("view", "str_replace", "create", "insert")
-        path: Path to the file or directory
-        old_str: Text to replace (for str_replace command)
-        new_str: Replacement text (for str_replace and insert commands)
-        file_text: Content for new file (for create command)
-        insert_line: Line number to insert after (for insert command)
-        view_range: [start_line, end_line] for viewing specific lines (for view command)
-
-    Returns:
-        Result of the operation
-    """
-    try:
-        if command == "view":
-            if not os.path.exists(path):
-                return f"Error: Path '{path}' does not exist"
-            if os.path.isdir(path):
-                return "\\n".join(os.listdir(path))
-            with open(path) as f:
-                lines = f.read().splitlines()
-            if view_range:
-                start, end = view_range
-                start_idx = max(0, start - 1)
-                end_idx = len(lines) if end == -1 else min(len(lines), end)
-                lines = lines[start_idx:end_idx]
-                start_num = start_idx + 1
-            else:
-                start_num = 1
-            return "\\n".join(f"{start_num + i}: {line}" for i, line in enumerate(lines))
-        elif command == "str_replace":
-            if old_str is None or new_str is None:
-                return "Error: str_replace requires both old_str and new_str parameters"
-            if not os.path.exists(path):
-                return f"Error: File '{path}' does not exist"
-            content = open(path).read()
-            if old_str not in content:
-                return "Error: Text not found in file"
-            count = content.count(old_str)
-            if count > 1:
-                return f"Error: Text appears {count} times in file. Please be more specific."
-            open(path, "w").write(content.replace(old_str, new_str, 1))
-            return f"Successfully replaced text in '{path}'"
-        elif command == "create":
-            if file_text is None:
-                return "Error: create requires file_text parameter"
-            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-            open(path, "w").write(file_text)
-            return f"Successfully created file '{path}'"
-        elif command == "insert":
-            if new_str is None or insert_line is None:
-                return "Error: insert requires both new_str and insert_line parameters"
-            if not os.path.exists(path):
-                return f"Error: File '{path}' does not exist"
-            lines = open(path).read().splitlines(True)
-            if insert_line == 0:
-                lines.insert(0, new_str + "\\n")
-            elif insert_line >= len(lines):
-                lines.append(new_str + "\\n")
-            else:
-                lines.insert(insert_line, new_str + "\\n")
-            open(path, "w").write("".join(lines))
-            return f"Successfully inserted text in '{path}' at line {insert_line + 1}"
-        else:
-            return f"Error: Unknown command '{command}'"
-    except Exception as e:
-        return f"Error: {e}"
-
-tools.append(file_operations)
 {{/if}}
 {{#if needsOs}}{{#unless isExportHarness}}
 _MOUNT_PATHS = [
@@ -5773,22 +5680,30 @@ def list_files(path: str) -> str:
     except OSError as e:
         return f"Error listing '{path}': {e.strerror}"
 
-tools.extend([file_read, file_write, list_files])
+for mounted_tool in (file_read, file_write, list_files):
+    _add_tool(mounted_tool, "builtin", "builtin")
 {{/unless}}{{/if}}
 
-{{#if (or hasGateway remoteMcpTools)}}
-# Add MCP clients to tools
-for mcp_client in mcp_clients:
+{{#if hasGateway}}
+# Add configured AgentCore Gateway providers. Harness exports defer loading so
+# collision handling runs after the remote tool names are known.
+for mcp_client in get_all_gateway_mcp_clients():
     if mcp_client:
-        tools.append(mcp_client)
-{{else}}
+        _add_tool(mcp_client, mcp_client.client_name or "gateway", "agentcore_gateway")
+{{/if}}
+{{#if remoteMcpTools}}
+for mcp_client in get_all_remote_mcp_clients():
+    if mcp_client:
+        _add_tool(mcp_client, mcp_client.client_name or "remote_mcp", "remote_mcp")
+{{/if}}
+{{#unless (or hasGateway remoteMcpTools)}}
 {{#unless isExportHarness}}
 # Add MCP client to tools if available
-for mcp_client in mcp_clients:
+for mcp_client in [get_streamable_http_mcp_client()]:
     if mcp_client:
-        tools.append(mcp_client)
+        _add_tool(mcp_client, "example_mcp", "remote_mcp")
 {{/unless}}
-{{/if}}
+{{/unless}}
 
 {{#if hasConfigBundle}}
 
@@ -5843,6 +5758,59 @@ def _make_conversation_manager():
     return NullConversationManager()
 {{/if}}
 
+{{#if isExportHarness}}
+def _create_agent(runtime_session_id="default-session", **kwargs):
+    consumer_plugins = list(kwargs.pop("plugins", None) or [])
+    skill_paths = list(kwargs.pop("skill_paths", None) or [])
+    parent_plugins = list(consumer_plugins)
+    {{#if hasSkillsFetcher}}
+    if skill_paths:
+        parent_plugins.append(AgentSkills(skills=skill_paths))
+    {{/if}}
+    {{#if hasHarnessContextOffloader}}
+    parent_plugins.append(create_context_offloader(runtime_session_id))
+    {{/if}}
+    tool_entries = [
+        *build_managed_builtin_tools({{safeJson harnessBuiltinTools}}),
+        *list(kwargs.pop("tools", None) or []),
+    ]
+    hooks = list(kwargs.get("hooks", None) or [])
+    provider = ManagedToolProvider(
+        tool_entries,
+        model=kwargs.get("model"),
+        system_prompt=kwargs.get("system_prompt", DEFAULT_SYSTEM_PROMPT),
+        conversation_manager_factory=_make_conversation_manager,
+        hooks=hooks,
+        consumer_plugins=consumer_plugins,
+        skill_paths=skill_paths,
+        session_id=runtime_session_id,
+        enable_todos={{#if (includes harnessBuiltinPlugins "todos")}}True{{else}}False{{/if}},
+        enable_context_offloader={{#if hasHarnessContextOffloader}}True{{else}}False{{/if}},
+        enable_subagent={{#if hasHarnessSubagent}}True{{else}}False{{/if}},
+    )
+    agent = create_harness(
+        builtin_tools=[],
+        background_tasks=False,
+        caching=False,
+        context_manager=False,
+        session=False,
+        skills=False,
+        memory=False,
+        builtin_plugins={{safeJson harnessBuiltinPlugins}},
+        tools=[provider],
+        plugins=parent_plugins or None,
+        **kwargs,
+    )
+    agent._export_inline_function_names = provider.inline_function_names
+    agent._export_invocation_hooks = [
+        hook for hook in hooks if callable(getattr(hook, "start_invocation", None))
+    ]
+    return agent
+{{else}}
+def _create_agent(**kwargs):
+    return Agent(**kwargs)
+{{/if}}
+
 {{#if hasMemory}}
 {{#unless hasPayment}}
 def agent_factory():
@@ -5855,14 +5823,21 @@ def agent_factory():
         {{/if}}
         key = f"{session_id}/{_actor_id}"
         if key not in cache:
-            cache[key] = Agent(
+            cache[key] = _create_agent(
+                {{#if isExportHarness}}
+                runtime_session_id=session_id,
+                {{/if}}
                 model=load_model(),
                 session_manager=get_memory_session_manager(session_id, _actor_id),
                 conversation_manager=_make_conversation_manager(),
                 system_prompt=DEFAULT_SYSTEM_PROMPT,
                 tools=tools,
                 {{#if hasSkillsFetcher}}
+                {{#if isExportHarness}}
+                skill_paths=skill_plugins or [],
+                {{else}}
                 plugins=skill_plugins or None,
+                {{/if}}
                 {{/if}}
                 {{#if hasExecutionLimits}}
                 tool_executor=SequentialToolExecutor(),
@@ -5900,13 +5875,20 @@ def agent_factory():
             return cache[session_id]
         if len(cache) >= 128:
             cache.popitem(last=False)
-        cache[session_id] = Agent(
+        cache[session_id] = _create_agent(
+            {{#if isExportHarness}}
+            runtime_session_id=session_id,
+            {{/if}}
             model=load_model(),
             system_prompt=DEFAULT_SYSTEM_PROMPT,
             tools=tools,
             conversation_manager=_make_conversation_manager(),
             {{#if hasSkillsFetcher}}
+            {{#if isExportHarness}}
+            skill_paths=skill_plugins or [],
+            {{else}}
             plugins=skill_plugins or None,
+            {{/if}}
             {{/if}}
             {{#if hasExecutionLimits}}
             tool_executor=SequentialToolExecutor(),
@@ -5981,26 +5963,28 @@ def _extract_prompt(payload: dict):
     return prompt
 
 
-def _has_inline_function_call(messages) -> bool:
+def _has_inline_function_call(messages, inline_function_names=None) -> bool:
     """Return True if messages contains an assistant toolUse for an inline function tool."""
-    if not _INLINE_FUNCTION_NAMES or not isinstance(messages, list):
+    names = _INLINE_FUNCTION_NAMES if inline_function_names is None else inline_function_names
+    if not names or not isinstance(messages, list):
         return False
     for msg in messages:
         if msg.get("role") == "assistant":
             for block in msg.get("content", []):
-                if isinstance(block, dict) and block.get("toolUse", {}).get("name") in _INLINE_FUNCTION_NAMES:
+                if isinstance(block, dict) and block.get("toolUse", {}).get("name") in names:
                     return True
     return False
 
 
-def _is_inline_function_call(event: dict) -> bool:
+def _is_inline_function_call(event: dict, inline_function_names=None) -> bool:
     """Check if a contentBlockStart event is for an inline function tool."""
-    if not _INLINE_FUNCTION_NAMES:
+    names = _INLINE_FUNCTION_NAMES if inline_function_names is None else inline_function_names
+    if not names:
         return False
     cbs = event.get("contentBlockStart", {})
     start = cbs.get("start", {})
     tool_use = start.get("toolUse") if isinstance(start, dict) else None
-    return tool_use is not None and tool_use.get("name") in _INLINE_FUNCTION_NAMES
+    return tool_use is not None and tool_use.get("name") in names
 
 
 
@@ -6034,7 +6018,11 @@ async def invoke(payload, context):
     {{/if}}
     skill_paths.extend(await asyncio.to_thread(resolve_git_skills, git_skill_sources, _git_identity_client))
     {{/if}}
+    {{#if isExportHarness}}
+    _skill_plugins = skill_paths
+    {{else}}
     _skill_plugins = [AgentSkills(skills=skill_paths)] if skill_paths else []
+    {{/if}}
 {{/if}}
 
 {{#if hasMemory}}
@@ -6045,12 +6033,16 @@ async def invoke(payload, context):
     {{else}}
     mem_user_id = getattr(context, 'user_id', 'default-user')
     {{/if}}
-    agent = Agent(
+    agent = _create_agent(
+        {{#if isExportHarness}}
+        runtime_session_id=mem_session_id,
+        {{/if}}
         model=load_model(),
         session_manager=get_memory_session_manager(mem_session_id, mem_user_id),
         system_prompt=DEFAULT_SYSTEM_PROMPT + PAYMENT_SYSTEM_PROMPT,
         tools=tools,
-        plugins=plugins{{#if hasSkillsFetcher}} + _skill_plugins{{/if}},{{#if hasConfigBundle}}
+        plugins=plugins{{#if hasSkillsFetcher}}{{#unless isExportHarness}} + _skill_plugins{{/unless}}{{/if}},
+        {{#if hasSkillsFetcher}}{{#if isExportHarness}}skill_paths=_skill_plugins,{{/if}}{{/if}}{{#if hasConfigBundle}}
         hooks=[ConfigBundleHook()],{{/if}}
     )
 {{else}}
@@ -6064,11 +6056,15 @@ async def invoke(payload, context):
 {{/if}}
 {{else}}
 {{#if hasPayment}}
-    agent = Agent(
+    agent = _create_agent(
+        {{#if isExportHarness}}
+        runtime_session_id=getattr(context, 'session_id', 'default-session'),
+        {{/if}}
         model=load_model(),
         system_prompt=DEFAULT_SYSTEM_PROMPT + PAYMENT_SYSTEM_PROMPT,
         tools=tools,
-        plugins=plugins{{#if hasSkillsFetcher}} + _skill_plugins{{/if}},{{#if hasConfigBundle}}
+        plugins=plugins{{#if hasSkillsFetcher}}{{#unless isExportHarness}} + _skill_plugins{{/unless}}{{/if}},
+        {{#if hasSkillsFetcher}}{{#if isExportHarness}}skill_paths=_skill_plugins,{{/if}}{{/if}}{{#if hasConfigBundle}}
         hooks=[ConfigBundleHook()],{{/if}}
     )
 {{else}}
@@ -6078,12 +6074,16 @@ async def invoke(payload, context):
 {{/if}}
 
     prompt = _extract_prompt(payload)
+    inline_function_names = getattr(agent, "_export_inline_function_names", _INLINE_FUNCTION_NAMES)
+
+    for invocation_hook in getattr(agent, "_export_invocation_hooks", []):
+        invocation_hook.start_invocation()
 
     {{#if inlineFunctionTools}}
     # If Turn 2 carries the harness-style assistant(toolUse)+user(toolResult) pair,
     # strip the placeholder turn Strands stored during Turn 1 so the real toolResult
     # is injected cleanly — same protocol as the harness runtime.
-    if _has_inline_function_call(prompt):
+    if _has_inline_function_call(prompt, inline_function_names):
         msgs = agent.messages
         if len(msgs) >= 2 and any("toolResult" in b for b in msgs[-1].get("content", [])):
             del msgs[-2:]
@@ -6115,7 +6115,7 @@ async def invoke(payload, context):
                 continue
             {{#if inlineFunctionTools}}
             if not hit_inline_function:
-                hit_inline_function = _is_inline_function_call(event["event"])
+                hit_inline_function = _is_inline_function_call(event["event"], inline_function_names)
             {{/if}}
             yield event
             {{#if inlineFunctionTools}}
@@ -6151,7 +6151,7 @@ async def invoke(payload, context):
             continue
         {{#if inlineFunctionTools}}
         if not hit_inline_function:
-            hit_inline_function = _is_inline_function_call(event["event"])
+            hit_inline_function = _is_inline_function_call(event["event"], inline_function_names)
         {{/if}}
         yield event
         {{#if inlineFunctionTools}}
@@ -6215,13 +6215,26 @@ def get_{{snakeCase name}}_mcp_client() -> MCPClient | None:
         return None
     {{/if}}
     {{#if (eq authType "AWS_IAM")}}
-    return MCPClient(lambda: aws_iam_streamablehttp_client(url, aws_service="bedrock-agentcore", aws_region=os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION"))), prefix="{{snakeCase name}}")
+    return MCPClient(
+        lambda: aws_iam_streamablehttp_client(
+            url,
+            aws_service="bedrock-agentcore",
+            aws_region=os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION")),
+        ),
+        {{#if ../isExportHarness}}application_name={{safeJson name}}{{else}}prefix="{{snakeCase name}}"{{/if}},
+    )
     {{else if (eq authType "CUSTOM_JWT")}}
     token = _get_bearer_token_{{snakeCase name}}()
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    return MCPClient(lambda: streamablehttp_client(url, headers=headers), prefix="{{snakeCase name}}")
+    return MCPClient(
+        lambda: streamablehttp_client(url, headers=headers),
+        {{#if ../isExportHarness}}application_name={{safeJson name}}{{else}}prefix="{{snakeCase name}}"{{/if}},
+    )
     {{else}}
-    return MCPClient(lambda: streamablehttp_client(url), prefix="{{snakeCase name}}")
+    return MCPClient(
+        lambda: streamablehttp_client(url),
+        {{#if ../isExportHarness}}application_name={{safeJson name}}{{else}}prefix="{{snakeCase name}}"{{/if}},
+    )
     {{/if}}
 
 {{/each}}
@@ -6257,9 +6270,15 @@ def get_{{snakeCase name}}_mcp_client() -> MCPClient | None:
         headers = { {{#each headerCredentials}}{{safeJson headerKey}}: os.environ.get("{{envVarName}}", ""){{#unless @last}}, {{/unless}}{{/each}} }
     else:
         headers = { {{#each headerCredentials}}{{safeJson headerKey}}: _get_{{snakeCase ../name}}_{{snakeCase headerKey}}_key(){{#unless @last}}, {{/unless}}{{/each}} }
-    return MCPClient(lambda: streamablehttp_client(url, headers=headers))
+    return MCPClient(
+        lambda: streamablehttp_client(url, headers=headers),
+        {{#if ../isExportHarness}}application_name={{safeJson name}}{{/if}}
+    )
     {{else}}
-    return MCPClient(lambda: streamablehttp_client(url))
+    return MCPClient(
+        lambda: streamablehttp_client(url),
+        {{#if ../isExportHarness}}application_name={{safeJson name}}{{/if}}
+    )
     {{/if}}
 
 {{/each}}
@@ -6360,11 +6379,22 @@ def load_model():
     {{/if}}
 {{else}}
 from strands.models.bedrock import BedrockModel
+{{#if isExportHarness}}
+from strands.models import CacheConfig
+{{/if}}
 
 
 def load_model() -> BedrockModel:
     """Get Bedrock model client using IAM credentials."""
-    return BedrockModel(model_id="{{#if modelId}}{{modelId}}{{else}}global.anthropic.claude-sonnet-4-5-20250929-v1:0{{/if}}"{{#if modelMaxTokens}}, max_tokens={{modelMaxTokens}}{{/if}})
+    return BedrockModel(
+        model_id="{{#if modelId}}{{modelId}}{{else}}global.anthropic.claude-sonnet-4-5-20250929-v1:0{{/if}}"{{#if modelMaxTokens}},
+        max_tokens={{modelMaxTokens}}{{/if}}{{#if isExportHarness}},
+        cache_config=CacheConfig(
+            strategy="auto",
+            system_prompt_ttl=True,
+            tools_ttl=True,
+        ){{/if}},
+    )
 {{/if}}
 {{/if}}
 {{#if (eq modelProvider "Anthropic")}}
@@ -6586,7 +6616,10 @@ dependencies = [
     {{/if}}{{#if (eq modelProvider "LiteLLM")}}"litellm >= 1.0.0",
     {{/if}}{{#if bedrockMantle}}"openai >= 1.0.0",
     "aws-bedrock-token-generator >= 1.0.0",
-    {{/if}}"strands-agents >= 1.15.0",
+    {{/if}}{{#if isExportHarness}}"strands-agents[web-fetch] >= 1.56.0, < 2.0.0",
+    "strands-harness == 0.1.2",
+    {{else}}"strands-agents >= 1.15.0",
+    {{/if}}
     {{#if (or hasBrowser hasCodeInterpreter)}}"strands-agents-tools >= 0.1.0",
     {{/if}}{{#if hasBrowser}}"nest-asyncio >= 1.5.0",
     "playwright >= 1.42.0",
@@ -6883,10 +6916,17 @@ def resolve_git_skills(sources: list, identity_client=None) -> list:
 `;
 
 exports[`Assets Directory Snapshots > Python framework assets > python/python/http/strands/capabilities/execution-limits/hooks/execution_limits.py should match snapshot 1`] = `
-"import time
+"{{#if isExportHarness}}
+import threading
+{{/if}}
+import time
 from typing import Optional
 
+{{#if isExportHarness}}
+from strands.hooks import AfterModelCallEvent, BeforeModelCallEvent
+{{else}}
 from strands.hooks import BeforeModelCallEvent
+{{/if}}
 from strands.hooks.registry import HookProvider, HookRegistry
 from strands.types.exceptions import EventLoopException
 
@@ -6896,6 +6936,105 @@ class ExecutionLimitExceeded(Exception):
         super().__init__(message)
 
 
+{{#if isExportHarness}}
+class InvocationBudget:
+    """One invocation-wide budget shared by the root Agent and its subagents."""
+
+    def __init__(
+        self,
+        max_iterations: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        timeout_seconds: Optional[float] = None,
+    ) -> None:
+        self._max_iterations = max_iterations
+        self._max_tokens = max_tokens
+        self._timeout_seconds = timeout_seconds
+        self._lock = threading.Lock()
+        self.reset()
+
+    def reset(self) -> None:
+        with self._lock:
+            self._iteration_count = 0
+            self._start_time: float | None = None
+            self._output_tokens = 0
+
+    def check_before_model_call(self) -> None:
+        with self._lock:
+            self._iteration_count += 1
+            now = time.monotonic()
+            if self._start_time is None:
+                self._start_time = now
+
+            if self._max_iterations is not None and self._iteration_count > self._max_iterations:
+                raise EventLoopException(
+                    ExecutionLimitExceeded(f"Max iterations exceeded: {self._max_iterations}")
+                )
+
+            if self._timeout_seconds is not None:
+                elapsed = now - self._start_time
+                if elapsed > self._timeout_seconds:
+                    raise EventLoopException(
+                        ExecutionLimitExceeded(
+                            f"Timeout exceeded: {self._timeout_seconds}s (elapsed {elapsed:.1f}s)"
+                        )
+                    )
+
+            if self._max_tokens is not None and self._output_tokens >= self._max_tokens:
+                raise EventLoopException(
+                    ExecutionLimitExceeded(
+                        f"Max output tokens exceeded: {self._output_tokens}/{self._max_tokens}"
+                    )
+                )
+
+    def record_model_call(self, event: AfterModelCallEvent) -> None:
+        response = event.stop_response
+        if response is None:
+            return
+        metadata = response.message.get("metadata") or {}
+        usage = metadata.get("usage")
+        if not isinstance(usage, dict):
+            return
+        output_tokens = usage.get("outputTokens")
+        if isinstance(output_tokens, (int, float)):
+            with self._lock:
+                self._output_tokens += int(output_tokens)
+
+
+class ExecutionLimitsHook(HookProvider):
+    def __init__(
+        self,
+        max_iterations: Optional[int] = None,
+        max_tokens: Optional[int] = None,
+        timeout_seconds: Optional[float] = None,
+        *,
+        budget: Optional[InvocationBudget] = None,
+    ) -> None:
+        self._budget = budget or InvocationBudget(
+            max_iterations=max_iterations,
+            max_tokens=max_tokens,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def register_hooks(self, registry: HookRegistry, **kwargs) -> None:
+        registry.add_callback(BeforeModelCallEvent, self._check_limits)
+        registry.add_callback(AfterModelCallEvent, self._record_usage)
+
+    def fork(self) -> "ExecutionLimitsHook":
+        """Create a child hook backed by the same invocation-wide budget."""
+
+        return ExecutionLimitsHook(budget=self._budget)
+
+    def start_invocation(self) -> None:
+        """Reset counters immediately before a new root invocation starts."""
+
+        self._budget.reset()
+
+    def _check_limits(self, event: BeforeModelCallEvent) -> None:
+        self._budget.check_before_model_call()
+
+    def _record_usage(self, event: AfterModelCallEvent) -> None:
+        self._budget.record_model_call(event)
+{{else}}
 class ExecutionLimitsHook(HookProvider):
     def __init__(
         self,
@@ -6937,6 +7076,443 @@ class ExecutionLimitsHook(HookProvider):
                         f"Max output tokens exceeded: {used}/{self._max_tokens}"
                     )
                 )
+{{/if}}
+"
+`;
+
+exports[`Assets Directory Snapshots > Python framework assets > python/python/http/strands/capabilities/harness/harness_runtime/__init__.py should match snapshot 1`] = `
+""""Runtime helpers used by exported AgentCore Harness agents."""
+
+from .managed import ManagedToolEntry, ManagedToolProvider, build_managed_builtin_tools, create_context_offloader
+
+__all__ = [
+    "ManagedToolEntry",
+    "ManagedToolProvider",
+    "build_managed_builtin_tools",
+    "create_context_offloader",
+]
+"
+`;
+
+exports[`Assets Directory Snapshots > Python framework assets > python/python/http/strands/capabilities/harness/harness_runtime/managed.py should match snapshot 1`] = `
+""""Standalone construction helpers matching the managed AgentCore Harness runtime."""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+import os
+from collections import Counter
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Any, cast
+
+from strands import Agent, AgentSkills
+from strands.storage import LocalFileStorage
+from strands.tools import ToolProvider
+from strands.tools.executors import SequentialToolExecutor
+from strands.tools.tools import AgentTool
+from strands.types.exceptions import StorageError
+from strands.types.tools import ToolGenerator, ToolSpec, ToolUse
+from strands.vended_plugins.context_offloader import ContextOffloader
+from strands.vended_tools import make_shell, make_web_fetch
+from strands_harness import create_harness
+from strands_harness.tools import AgentSpec, Choice, Preset, edit, make_subagent, read, write
+
+logger = logging.getLogger(__name__)
+
+_BEDROCK_TOOL_NAME_LIMIT = 64
+_INHERITABLE_TOOL_TYPES = {"builtin", "remote_mcp", "agentcore_gateway"}
+_OFFLOAD_ROOT = "/tmp/loopy/offloaded"
+_OFFLOAD_USAGE_ROOT = "/tmp/loopy/offload-usage"
+_MAX_OFFLOAD_BYTES = 8 * 1024 * 1024 * 1024
+_USAGE_KEY = "bytes"
+
+_GENERALIST = Preset(
+    instructions=(
+        "You are a general-purpose subagent handling a focused subtask on behalf of a parent "
+        "agent. You run in your own fresh conversation and cannot ask follow-up questions, so "
+        "work from the task as given, make reasonable assumptions where it is underspecified, "
+        "and see it through to a verified result. Return a self-contained answer: state what you "
+        "did, what you found, and anything the parent needs to act on. Your final message is the "
+        "only thing that returns to the parent, so put the substance there rather than in "
+        "intermediate steps."
+    ),
+    description="a general-purpose agent for a focused subtask that runs in its own context",
+)
+
+
+@dataclass(frozen=True)
+class ManagedToolEntry:
+    """A tool plus the Harness namespace and lifecycle category that produced it."""
+
+    namespace: str
+    tool_type: str
+    tool: Any
+
+
+class AliasedAgentTool(AgentTool):
+    """Expose a collision-safe model-facing name without mutating the original tool."""
+
+    def __init__(self, tool: AgentTool, name: str) -> None:
+        super().__init__()
+        self._tool = tool
+        self._name = name
+
+    @property
+    def original_tool(self) -> AgentTool:
+        return self._tool
+
+    @property
+    def tool_name(self) -> str:
+        return self._name
+
+    @property
+    def tool_spec(self) -> ToolSpec:
+        return cast(ToolSpec, {**self._tool.tool_spec, "name": self._name})
+
+    @property
+    def tool_type(self) -> str:
+        return self._tool.tool_type
+
+    @property
+    def supports_hot_reload(self) -> bool:
+        return self._tool.supports_hot_reload
+
+    @property
+    def is_dynamic(self) -> bool:
+        return self._tool.is_dynamic
+
+    def mark_dynamic(self) -> None:
+        self._tool.mark_dynamic()
+
+    def get_display_properties(self) -> dict[str, str]:
+        properties = dict(self._tool.get_display_properties())
+        properties["Name"] = self._name
+        return properties
+
+    def stream(
+        self,
+        tool_use: ToolUse,
+        invocation_state: dict[str, Any],
+        **kwargs: Any,
+    ) -> ToolGenerator:
+        return self._tool.stream(tool_use, invocation_state, **kwargs)
+
+
+class SessionByteBudgetStorage:
+    """Session-scoped storage with the managed Harness's monotonic byte budget."""
+
+    def __init__(
+        self,
+        data_storage: LocalFileStorage,
+        usage_storage: LocalFileStorage,
+        *,
+        max_bytes: int,
+    ) -> None:
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be positive")
+        self._data_storage = data_storage
+        self._usage_storage = usage_storage
+        self._max_bytes = max_bytes
+
+    def for_sandbox(self, sandbox: Any) -> "SessionByteBudgetStorage":
+        return SessionByteBudgetStorage(
+            self._data_storage.for_sandbox(sandbox),
+            self._usage_storage,
+            max_bytes=self._max_bytes,
+        )
+
+    async def write(self, key: str, data: bytes) -> None:
+        used_bytes = await self._read_usage()
+        next_used_bytes = used_bytes + len(data)
+        if next_used_bytes > self._max_bytes:
+            raise StorageError(f"Context offload byte limit reached ({self._max_bytes})")
+
+        await self._write_usage(next_used_bytes)
+        try:
+            await self._data_storage.write(key, data)
+        except BaseException:
+            try:
+                await self._write_usage(used_bytes)
+            except Exception:
+                logger.exception("Failed to roll back context offload byte reservation")
+            raise
+
+    async def read(self, key: str) -> bytes | None:
+        return await self._data_storage.read(key)
+
+    async def delete(self, key: str) -> None:
+        await self._data_storage.delete(key)
+
+    async def list(self, query: str = "") -> list[str]:
+        return await self._data_storage.list(query)
+
+    async def search(self, query: str) -> list[Any]:
+        return await self._data_storage.search(query)
+
+    async def _read_usage(self) -> int:
+        raw = await self._usage_storage.read(_USAGE_KEY)
+        if raw is None:
+            return 0
+        try:
+            used_bytes = int(raw)
+        except (TypeError, ValueError) as error:
+            raise StorageError("Context offload byte counter is invalid") from error
+        if used_bytes < 0:
+            raise StorageError("Context offload byte counter is invalid")
+        return used_bytes
+
+    async def _write_usage(self, used_bytes: int) -> None:
+        await self._usage_storage.write(_USAGE_KEY, str(used_bytes).encode("ascii"))
+
+
+def create_context_offloader(session_id: str) -> ContextOffloader:
+    """Create an offloader that survives Agent rebuilds while remaining session-isolated."""
+
+    session_key = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+    storage = SessionByteBudgetStorage(
+        LocalFileStorage(os.path.join(_OFFLOAD_ROOT, session_key)),
+        LocalFileStorage(os.path.join(_OFFLOAD_USAGE_ROOT, session_key)),
+        max_bytes=_MAX_OFFLOAD_BYTES,
+    )
+    return ContextOffloader(
+        storage=storage,
+        max_result_tokens=1500,
+        preview_tokens=750,
+        include_retrieval_tool=True,
+        evict_after_cycles=None,
+    )
+
+
+def build_managed_builtin_tools(enabled_tools: Sequence[str]) -> list[ManagedToolEntry]:
+    """Build the frozen managed tool set selected by the Harness allowedTools policy."""
+
+    enabled = set(enabled_tools)
+    candidates = [
+        ("shell", make_shell()),
+        ("read", read),
+        ("write", write),
+        ("edit", edit),
+        ("web_fetch", make_web_fetch(mode="markdown")),
+    ]
+    return [ManagedToolEntry("builtin", "builtin", tool) for name, tool in candidates if name in enabled]
+
+
+def _registry_name(name: str) -> str:
+    return name.replace("-", "_")
+
+
+def _name_with_hash_suffix(name: str, identity: str) -> str:
+    suffix = f"_{hashlib.sha256(identity.encode('utf-8')).hexdigest()[:8]}"
+    return f"{name[:_BEDROCK_TOOL_NAME_LIMIT - len(suffix)]}{suffix}"
+
+
+def _allocate_tool_names(entries: Sequence[ManagedToolEntry], reserved_names: set[str]) -> list[str]:
+    original_names = [entry.tool.tool_name for entry in entries]
+    original_counts = Counter(_registry_name(name) for name in original_names)
+    original_counts.update(_registry_name(name) for name in reserved_names)
+
+    candidates = [
+        (
+            f"{entry.namespace}_{original_name}"
+            if original_counts[_registry_name(original_name)] > 1
+            else original_name
+        )[:_BEDROCK_TOOL_NAME_LIMIT]
+        for entry, original_name in zip(entries, original_names, strict=True)
+    ]
+
+    candidate_counts = Counter(_registry_name(name) for name in candidates)
+    candidate_counts.update(_registry_name(name) for name in reserved_names)
+    used_names = {_registry_name(name) for name in reserved_names}
+    allocated_names: list[str] = []
+
+    for index, (entry, original_name, candidate) in enumerate(
+        zip(entries, original_names, candidates, strict=True)
+    ):
+        if candidate_counts[_registry_name(candidate)] > 1:
+            candidate = _name_with_hash_suffix(
+                candidate,
+                f"{entry.namespace}/{original_name}/{index}",
+            )
+        attempt = 0
+        while _registry_name(candidate) in used_names:
+            candidate = _name_with_hash_suffix(
+                candidate,
+                f"{entry.namespace}/{original_name}/{index}/{attempt}",
+            )
+            attempt += 1
+        used_names.add(_registry_name(candidate))
+        allocated_names.append(candidate)
+
+    return allocated_names
+
+
+def _plugin_tool_names(plugins: Sequence[Any]) -> set[str]:
+    return {
+        tool.tool_name
+        for plugin in plugins
+        for tool in (getattr(plugin, "tools", None) or ())
+        if hasattr(tool, "tool_name")
+    }
+
+
+def _fork_hooks(hooks: Sequence[Any]) -> list[Any]:
+    return [hook.fork() if callable(getattr(hook, "fork", None)) else hook for hook in hooks]
+
+
+class ManagedToolProvider(ToolProvider):
+    """Resolve providers, allocate collision-safe names, and add the managed subagent."""
+
+    def __init__(
+        self,
+        entries: Sequence[ManagedToolEntry],
+        *,
+        model: Any,
+        system_prompt: str,
+        conversation_manager_factory: Any,
+        hooks: Sequence[Any] = (),
+        consumer_plugins: Sequence[Any] = (),
+        skill_paths: Sequence[str] = (),
+        session_id: str,
+        enable_todos: bool,
+        enable_context_offloader: bool,
+        enable_subagent: bool,
+    ) -> None:
+        self._entries = list(entries)
+        self._model = model
+        self._system_prompt = system_prompt
+        self._conversation_manager_factory = conversation_manager_factory
+        self._hooks = list(hooks)
+        self._consumer_plugins = list(consumer_plugins)
+        self._skill_paths = list(skill_paths)
+        self._session_id = session_id
+        self._enable_todos = enable_todos
+        self._enable_context_offloader = enable_context_offloader
+        self._enable_subagent = enable_subagent
+        self._consumers: set[Any] = set()
+        self._resolved_tools: list[AgentTool] | None = None
+        self.inline_function_names: set[str] = set()
+
+    def add_consumer(self, consumer_id: Any, **kwargs: Any) -> None:
+        if consumer_id in self._consumers:
+            return
+        self._consumers.add(consumer_id)
+        for index, entry in enumerate(self._entries):
+            if isinstance(entry.tool, ToolProvider):
+                entry.tool.add_consumer((consumer_id, index))
+
+    def remove_consumer(self, consumer_id: Any, **kwargs: Any) -> None:
+        if consumer_id not in self._consumers:
+            return
+        self._consumers.remove(consumer_id)
+        for index, entry in enumerate(self._entries):
+            if isinstance(entry.tool, ToolProvider):
+                entry.tool.remove_consumer((consumer_id, index))
+
+    async def load_tools(self, **kwargs: Any) -> Sequence[AgentTool]:
+        if self._resolved_tools is not None:
+            return self._resolved_tools
+
+        resolved_entries: list[ManagedToolEntry] = []
+        for entry in self._entries:
+            if isinstance(entry.tool, ToolProvider):
+                loaded_tools = await entry.tool.load_tools()
+                resolved_entries.extend(
+                    ManagedToolEntry(entry.namespace, entry.tool_type, tool)
+                    for tool in loaded_tools
+                )
+            elif isinstance(entry.tool, AgentTool):
+                resolved_entries.append(entry)
+
+        reserved_names = _plugin_tool_names(self._consumer_plugins)
+        if self._skill_paths:
+            reserved_names.add("skills")
+        if self._enable_todos:
+            reserved_names.add("todo_write")
+        if self._enable_context_offloader:
+            reserved_names.add("retrieve_offloaded_content")
+        if self._enable_subagent:
+            reserved_names.add("subagent")
+
+        allocated_names = _allocate_tool_names(resolved_entries, reserved_names)
+        assigned_entries: list[ManagedToolEntry] = []
+        for entry, assigned_name in zip(resolved_entries, allocated_names, strict=True):
+            tool = entry.tool
+            if assigned_name != tool.tool_name:
+                tool = AliasedAgentTool(tool, assigned_name)
+            assigned_entries.append(ManagedToolEntry(entry.namespace, entry.tool_type, tool))
+
+        self.inline_function_names = {
+            entry.tool.tool_name
+            for entry in assigned_entries
+            if entry.tool_type == "inline_function"
+        }
+
+        resolved_tools = [entry.tool for entry in assigned_entries]
+        if self._enable_subagent:
+            resolved_tools.append(self._build_subagent(assigned_entries))
+        self._resolved_tools = resolved_tools
+        return resolved_tools
+
+    def _build_subagent(self, entries: Sequence[ManagedToolEntry]) -> AgentTool:
+        safe_tools = {
+            entry.tool.tool_name: entry.tool
+            for entry in entries
+            if entry.tool_type in _INHERITABLE_TOOL_TYPES
+        }
+
+        plugin_tool_names: set[str] = set()
+        if self._skill_paths:
+            plugin_tool_names.add("skills")
+        if self._enable_todos:
+            plugin_tool_names.add("todo_write")
+        if self._enable_context_offloader:
+            plugin_tool_names.add("retrieve_offloaded_content")
+        inherited_tool_names = [*safe_tools, *sorted(plugin_tool_names)]
+
+        def build_child(spec: AgentSpec) -> Agent:
+            selected_names = set(spec.tools if spec.tools is not None else inherited_tool_names)
+            selected_tools = [
+                tool
+                for name, tool in safe_tools.items()
+                if name in selected_names
+            ]
+
+            selected_plugins: list[Any] = []
+            if self._skill_paths and "skills" in selected_names:
+                selected_plugins.append(AgentSkills(skills=self._skill_paths))
+            if self._enable_context_offloader and "retrieve_offloaded_content" in selected_names:
+                selected_plugins.append(create_context_offloader(self._session_id))
+
+            return create_harness(
+                model=spec.model or self._model,
+                system_prompt=spec.instructions or self._system_prompt,
+                tools=selected_tools,
+                plugins=selected_plugins or None,
+                hooks=_fork_hooks(self._hooks),
+                conversation_manager=self._conversation_manager_factory(),
+                tool_executor=SequentialToolExecutor(),
+                callback_handler=None,
+                builtin_tools=[],
+                builtin_plugins=["todos"]
+                if self._enable_todos and "todo_write" in selected_names
+                else [],
+                background_tasks=False,
+                caching=False,
+                context_manager=False,
+                session=False,
+                skills=False,
+                memory=False,
+            )
+
+        return make_subagent(
+            builder=build_child,
+            presets={"generalist": _GENERALIST},
+            inherited_tools=inherited_tool_names,
+            context=Choice(["none", "all", "no_tools"]),
+            name="subagent",
+        )
 "
 `;
 

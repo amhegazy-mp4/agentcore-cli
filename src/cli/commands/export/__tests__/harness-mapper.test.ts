@@ -1239,49 +1239,94 @@ describe('resolveInlineFunctionTools', () => {
 });
 
 // ============================================================================
-// isBuiltinIncluded (shell / file_operations)
+// Strands Harness capabilities selected by allowedTools
 // ============================================================================
 
-describe('isBuiltinIncluded (shell / file_operations)', () => {
-  it('includes shell and file_operations when allowedTools is wildcard', () => {
+describe('Strands Harness allowedTools mapping', () => {
+  const allHarnessTools = ['shell', 'read', 'write', 'edit', 'web_fetch'];
+
+  it('includes the complete managed capability set when allowedTools is wildcard', () => {
     const ctx = baseContext({ allowedTools: ['*'] });
     const { renderConfig } = mapHarnessToExportConfig(ctx, 'CodeZip');
-    expect(renderConfig.hasShell).toBe(true);
-    expect(renderConfig.hasFileOperations).toBe(true);
+    expect(renderConfig.harnessBuiltinTools).toEqual(allHarnessTools);
+    expect(renderConfig.harnessBuiltinPlugins).toEqual(['todos']);
+    expect(renderConfig.hasHarnessContextOffloader).toBe(true);
+    expect(renderConfig.hasHarnessSubagent).toBe(true);
   });
 
-  it('includes shell and file_operations when allowedTools is unset (defaults to wildcard)', () => {
+  it('defaults an unset allowedTools list to the complete managed capability set', () => {
     const ctx = baseContext();
     const { renderConfig } = mapHarnessToExportConfig(ctx, 'CodeZip');
-    expect(renderConfig.hasShell).toBe(true);
-    expect(renderConfig.hasFileOperations).toBe(true);
+    expect(renderConfig.harnessBuiltinTools).toEqual(allHarnessTools);
+    expect(renderConfig.harnessBuiltinPlugins).toEqual(['todos']);
+    expect(renderConfig.hasHarnessContextOffloader).toBe(true);
+    expect(renderConfig.hasHarnessSubagent).toBe(true);
   });
 
-  it('includes shell via @builtin pattern', () => {
+  it('includes the complete managed capability set via @builtin', () => {
     const ctx = baseContext({ allowedTools: ['@builtin'] });
     const { renderConfig } = mapHarnessToExportConfig(ctx, 'CodeZip');
-    expect(renderConfig.hasShell).toBe(true);
-    expect(renderConfig.hasFileOperations).toBe(true);
+    expect(renderConfig.harnessBuiltinTools).toEqual(allHarnessTools);
+    expect(renderConfig.harnessBuiltinPlugins).toEqual(['todos']);
+    expect(renderConfig.hasHarnessContextOffloader).toBe(true);
+    expect(renderConfig.hasHarnessSubagent).toBe(true);
   });
 
-  it('includes shell via @builtin/shell pattern', () => {
-    const ctx = baseContext({ allowedTools: ['@builtin/shell'] });
+  it.each([
+    ['shell', 'shell'],
+    ['@builtin/shell', 'shell'],
+    ['read', 'read'],
+    ['write', 'write'],
+    ['edit', 'edit'],
+    ['web_fetch', 'web_fetch'],
+  ] as const)('maps selector %s to only the %s Strands Harness tool', (selector, tool) => {
+    const ctx = baseContext({ allowedTools: [selector] });
     const { renderConfig } = mapHarnessToExportConfig(ctx, 'CodeZip');
-    expect(renderConfig.hasShell).toBe(true);
-    expect(renderConfig.hasFileOperations).toBe(false);
+    expect(renderConfig.harnessBuiltinTools).toEqual([tool]);
+    expect(renderConfig.harnessBuiltinPlugins).toEqual([]);
+    expect(renderConfig.hasHarnessContextOffloader).toBe(false);
+    expect(renderConfig.hasHarnessSubagent).toBe(false);
   });
 
-  it('excludes both builtins when allowedTools only lists non-builtin tools', () => {
+  it('maps subagent separately from the five concrete managed tools', () => {
+    const ctx = baseContext({ allowedTools: ['subagent'] });
+    const { renderConfig } = mapHarnessToExportConfig(ctx, 'CodeZip');
+    expect(renderConfig.harnessBuiltinTools).toEqual([]);
+    expect(renderConfig.harnessBuiltinPlugins).toEqual([]);
+    expect(renderConfig.hasHarnessContextOffloader).toBe(false);
+    expect(renderConfig.hasHarnessSubagent).toBe(true);
+  });
+
+  it('expands the legacy file_operations permission to read, write, and edit', () => {
+    const ctx = baseContext({ allowedTools: ['file_operations'] });
+    const { renderConfig } = mapHarnessToExportConfig(ctx, 'CodeZip');
+    expect(renderConfig.harnessBuiltinTools).toEqual(['read', 'write', 'edit']);
+  });
+
+  it('maps special plugin permissions without adding unrelated tools', () => {
+    const ctx = baseContext({ allowedTools: ['todos', 'context_offloader'] });
+    const { renderConfig } = mapHarnessToExportConfig(ctx, 'CodeZip');
+    expect(renderConfig.harnessBuiltinTools).toEqual([]);
+    expect(renderConfig.harnessBuiltinPlugins).toEqual(['todos']);
+    expect(renderConfig.hasHarnessContextOffloader).toBe(true);
+    expect(renderConfig.hasHarnessSubagent).toBe(false);
+  });
+
+  it('excludes all managed capabilities for an empty allowedTools list', () => {
+    const ctx = baseContext({ allowedTools: [] });
+    const { renderConfig } = mapHarnessToExportConfig(ctx, 'CodeZip');
+    expect(renderConfig.harnessBuiltinTools).toEqual([]);
+    expect(renderConfig.harnessBuiltinPlugins).toEqual([]);
+    expect(renderConfig.hasHarnessContextOffloader).toBe(false);
+    expect(renderConfig.hasHarnessSubagent).toBe(false);
+  });
+
+  it('excludes managed capabilities when allowedTools only names a consumer tool', () => {
     const ctx = baseContext({ allowedTools: ['some-tool'] });
     const { renderConfig } = mapHarnessToExportConfig(ctx, 'CodeZip');
-    expect(renderConfig.hasShell).toBe(false);
-    expect(renderConfig.hasFileOperations).toBe(false);
-  });
-
-  it('plain "shell" name does not match the builtin/shell builtin', () => {
-    // Only @builtin or @builtin/shell patterns match builtins, not plain tool names
-    const ctx = baseContext({ allowedTools: ['shell'] });
-    const { renderConfig } = mapHarnessToExportConfig(ctx, 'CodeZip');
-    expect(renderConfig.hasShell).toBe(false);
+    expect(renderConfig.harnessBuiltinTools).toEqual([]);
+    expect(renderConfig.harnessBuiltinPlugins).toEqual([]);
+    expect(renderConfig.hasHarnessContextOffloader).toBe(false);
+    expect(renderConfig.hasHarnessSubagent).toBe(false);
   });
 });

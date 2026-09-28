@@ -39,6 +39,10 @@ export abstract class BaseRenderer {
     return !!(this.config.maxIterations ?? this.config.maxTokens ?? this.config.timeoutSeconds);
   }
 
+  protected shouldRenderHarnessRuntime(): boolean {
+    return this.config.isExportHarness === true;
+  }
+
   protected getTemplateDir(): string {
     const language = this.config.targetLanguage.toLowerCase();
     return path.join(this.baseTemplateDir, language, this.protocolMode, this.sdkName);
@@ -87,6 +91,13 @@ export abstract class BaseRenderer {
       const limitsCapabilityDir = path.join(templateDir, 'capabilities', 'execution-limits');
       if (existsSync(limitsCapabilityDir)) {
         await copyAndRenderDir(limitsCapabilityDir, projectDir, templateData);
+      }
+    }
+
+    if (this.shouldRenderHarnessRuntime()) {
+      const harnessCapabilityDir = path.join(templateDir, 'capabilities', 'harness');
+      if (existsSync(harnessCapabilityDir)) {
+        await copyAndRenderDir(harnessCapabilityDir, projectDir, templateData);
       }
     }
 

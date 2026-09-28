@@ -1,15 +1,43 @@
 import {
   CUSTOM_DOCKERFILE_NOTE_CATEGORY,
+  LOCAL_EXPORT_DEFAULTS_NOTE_CATEGORY,
   PATH_SKILLS_COPIED_NOTE_CATEGORY,
   PATH_SKILLS_VERIFY_BASE_IMAGE_NOTE_CATEGORY,
 } from '../constants';
 import {
   buildCustomDockerfileNote,
+  buildLocalExportDefaultsNote,
   buildMissingDockerfileNote,
   buildPathSkillsCopiedNote,
   buildPathSkillsVerifyNote,
+  describeExportSource,
 } from '../harness-action';
 import { describe, expect, it } from 'vitest';
+
+// ============================================================================
+// Local export boundary note
+// ============================================================================
+
+describe('buildLocalExportDefaultsNote', () => {
+  it('identifies the local source and directs users to --arn for deployed effective configuration', () => {
+    const note = buildLocalExportDefaultsNote('MyHarness');
+    expect(note.category).toBe(LOCAL_EXPORT_DEFAULTS_NOTE_CATEGORY);
+    expect(note.message).toContain('app/MyHarness/harness.json');
+    expect(note.message).toContain('Service-applied defaults may therefore be absent');
+    expect(note.message).toContain('agentcore export harness --arn <harness-arn>');
+  });
+});
+
+describe('describeExportSource', () => {
+  it('labels --name exports as local configuration', () => {
+    expect(describeExportSource('MyHarness')).toBe('app/MyHarness/harness.json (local configuration)');
+  });
+
+  it('labels --arn exports as fetched from the Harness service', () => {
+    const arn = 'arn:aws:bedrock-agentcore:us-east-1:111122223333:harness/h-123';
+    expect(describeExportSource('MyHarness', arn)).toBe(`${arn} (fetched from the Harness service)`);
+  });
+});
 
 // ============================================================================
 // Custom-Dockerfile export note

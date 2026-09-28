@@ -2,6 +2,7 @@ export const EXPORT_NOTES_FILENAME = 'EXPORT_NOTES.md';
 
 export const DEFAULT_SYSTEM_PROMPT = 'You are a helpful assistant.';
 
+export const LOCAL_EXPORT_DEFAULTS_NOTE_CATEGORY = 'Local export may omit service-applied defaults';
 export const CONTAINER_URI_NOTE_CATEGORY = 'containerUri: verify Python in base image';
 export const CUSTOM_DOCKERFILE_NOTE_CATEGORY = 'Custom harness Dockerfile needs the agent build layer';
 export const CONTAINER_URI_ECR_PULL_NOTE_CATEGORY = 'containerUri base image requires ECR pull permission';

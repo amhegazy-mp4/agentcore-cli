@@ -16,6 +16,7 @@ import { StrandsRenderer } from '../../templates/StrandsRenderer';
 import {
   CUSTOM_DOCKERFILE_NOTE_CATEGORY,
   EXPORT_NOTES_FILENAME,
+  LOCAL_EXPORT_DEFAULTS_NOTE_CATEGORY,
   PATH_SKILLS_COPIED_NOTE_CATEGORY,
   PATH_SKILLS_VERIFY_BASE_IMAGE_NOTE_CATEGORY,
 } from './constants';
@@ -101,6 +102,12 @@ export async function handleExportHarness(
         context = await resolveHarnessContext(harnessName, targetAgentName, undefined, prefetched);
       } catch (err) {
         return { success: false as const, error: err instanceof Error ? err : new Error(String(err)) };
+      }
+
+      // The local --name path cannot see defaults applied by the service. Keep that boundary
+      // visible in both the command output and the generated EXPORT_NOTES.md.
+      if (options.name) {
+        context.exportNotes.push(buildLocalExportDefaultsNote(harnessName));
       }
 
       // 2. Map harness spec to render config + agent env spec
@@ -257,7 +264,13 @@ export async function handleExportHarness(
 
       // 7. Write EXPORT_NOTES.md
       log('Writing EXPORT_NOTES.md');
-      writeExportNotes(context.exportNotes, harnessName, targetAgentName, agentDir);
+      writeExportNotes(
+        context.exportNotes,
+        harnessName,
+        targetAgentName,
+        agentDir,
+        describeExportSource(harnessName, options.arn)
+      );
 
       // Record telemetry attrs after all work is done
       recorder.set({
@@ -349,6 +362,27 @@ async function writeExportedAgentToProject(
   }
 
   await configIO.writeProjectSpec(project);
+}
+
+// ============================================================================
+// Export boundary notes
+// ============================================================================
+
+/** Note emitted for --name because that path reads local files rather than the deployed Harness. */
+export function buildLocalExportDefaultsNote(harnessName: string): ExportNote {
+  return {
+    category: LOCAL_EXPORT_DEFAULTS_NOTE_CATEGORY,
+    message:
+      `This export read app/${harnessName}/harness.json and did not fetch the deployed Harness from the ` +
+      'service. Service-applied defaults may therefore be absent. To capture the currently deployed ' +
+      'declarative configuration, export by ARN instead: ' +
+      '`agentcore export harness --arn <harness-arn>`.',
+  };
+}
+
+/** Human-readable source recorded in EXPORT_NOTES.md. */
+export function describeExportSource(harnessName: string, arn?: string): string {
+  return arn ? `${arn} (fetched from the Harness service)` : `app/${harnessName}/harness.json (local configuration)`;
 }
 
 // ============================================================================
@@ -444,7 +478,13 @@ function readStrandsVersion(agentDir: string): string {
   }
 }
 
-function writeExportNotes(notes: ExportNote[], harnessName: string, agentName: string, agentDir: string): void {
+function writeExportNotes(
+  notes: ExportNote[],
+  harnessName: string,
+  agentName: string,
+  agentDir: string,
+  sourceDescription: string
+): void {
   const today = new Date().toISOString().split('T')[0];
   const strandsVersion = readStrandsVersion(agentDir);
   const lines: string[] = [
@@ -452,7 +492,7 @@ function writeExportNotes(notes: ExportNote[], harnessName: string, agentName: s
     '',
     `Exported on: ${today}`,
     `Strands version: ${strandsVersion}`,
-    `Source harness: agentcore/app/${harnessName}/harness.json`,
+    `Source harness: ${sourceDescription}`,
     `Generated agent: app/${agentName}/`,
     '',
   ];

@@ -6,7 +6,17 @@ import json
 from strands.tools.tools import PythonAgentTool
 from strands.types.tools import ToolResult, ToolUse
 {{/if}}
+{{#if isExportHarness}}
+from strands_harness import create_harness
+from harness_runtime import (
+    ManagedToolEntry,
+    ManagedToolProvider,
+    build_managed_builtin_tools,
+    create_context_offloader,
+)
+{{else}}
 from strands import Agent, tool
+{{/if}}
 {{#if hasSkillsFetcher}}
 from strands import AgentSkills
 {{#if hasFetchedSkills}}
@@ -17,12 +27,6 @@ from bedrock_agentcore.services.identity import IdentityClient
 {{/if}}
 {{/if}}
 import asyncio
-{{#if hasShell}}
-import subprocess
-{{/if}}
-{{#if hasFileOperations}}
-import os
-{{/if}}
 {{#if hasExecutionLimits}}
 from strands.tools.executors import SequentialToolExecutor
 from strands.types.exceptions import EventLoopException
@@ -66,33 +70,15 @@ from mcp_client.client import get_streamable_http_mcp_client
 {{#if hasMemory}}
 from memory.session import get_memory_session_manager
 {{/if}}
-{{#unless hasFileOperations}}
 {{#if (or needsOs browserIdentifierEnvVar codeInterpreterIdentifierEnvVar (some gitSkills "credentialArn"))}}
 import os
 {{/if}}
-{{/unless}}
 {{#if hasPayment}}
 from capabilities.payments.payments import create_payments_plugin, PAYMENT_SYSTEM_PROMPT
 {{/if}}
 
 app = BedrockAgentCoreApp()
 log = app.logger
-
-{{#if (or hasGateway remoteMcpTools)}}
-# Define MCP clients for all configured MCP servers (gateways and/or remote MCP)
-mcp_clients = []
-{{#if hasGateway}}
-mcp_clients += get_all_gateway_mcp_clients()
-{{/if}}
-{{#if remoteMcpTools}}
-mcp_clients += get_all_remote_mcp_clients()
-{{/if}}
-{{else}}
-{{#unless isExportHarness}}
-# Define a Streamable HTTP MCP Client
-mcp_clients = [get_streamable_http_mcp_client()]
-{{/unless}}
-{{/if}}
 
 {{#if systemPromptText}}
 DEFAULT_SYSTEM_PROMPT = """{{escapePyStr systemPromptText}}"""
@@ -115,6 +101,14 @@ DEFAULT_TOOL_DESC = "Return the sum of two numbers"
 # Define a collection of tools used by the model
 tools = []
 
+{{#if isExportHarness}}
+def _add_tool(tool: Any, namespace: str, tool_type: str) -> None:
+    tools.append(ManagedToolEntry(namespace, tool_type, tool))
+{{else}}
+def _add_tool(tool: Any, namespace: str, tool_type: str) -> None:
+    tools.append(tool)
+{{/if}}
+
 {{#if inlineFunctionTools}}
 # Inline function tools — stop the agent loop so the tool call streams back to the caller
 def _make_inline_tool(name: str, spec: dict) -> PythonAgentTool:
@@ -130,7 +124,7 @@ _INLINE_SPEC_{{snakeCase name}} = {
     "description": {{safeJson description}},
     "inputSchema": {"json": json.loads({{pyJsonStr inputSchema}}) },
 }
-tools.append(_make_inline_tool("{{name}}", _INLINE_SPEC_{{snakeCase name}}))
+_add_tool(_make_inline_tool("{{name}}", _INLINE_SPEC_{{snakeCase name}}), "{{name}}", "inline_function")
 {{/each}}
 
 _INLINE_FUNCTION_NAMES = { {{#each inlineFunctionTools}}"{{name}}"{{#unless @last}}, {{/unless}}{{/each}} }
@@ -148,126 +142,37 @@ _INLINE_FUNCTION_NAMES = set()
 def add_numbers(a: int, b: int) -> int:
     """Return the sum of two numbers"""
     return a+b
-tools.append(add_numbers)
+_add_tool(add_numbers, "builtin", "builtin")
 
 {{/unless}}
 {{/if}}
 {{#if hasBrowser}}
 {{#if browserIdentifierEnvVar}}
 _browser_id = os.getenv("{{browserIdentifierEnvVar}}")
-tools.append(AgentCoreBrowser(**({"identifier": _browser_id} if _browser_id else {})).browser)
+_add_tool(
+    AgentCoreBrowser(**({"identifier": _browser_id} if _browser_id else {})).browser,
+    "{{browserToolName}}",
+    "agentcore_browser",
+)
 {{else}}
-tools.append(AgentCoreBrowser().browser)
+_add_tool(AgentCoreBrowser().browser, "{{browserToolName}}", "agentcore_browser")
 {{/if}}
 {{/if}}
 {{#if hasCodeInterpreter}}
 {{#if codeInterpreterIdentifierEnvVar}}
 _code_interpreter_id = os.getenv("{{codeInterpreterIdentifierEnvVar}}")
-tools.append(AgentCoreCodeInterpreter(**({"identifier": _code_interpreter_id} if _code_interpreter_id else {})).code_interpreter)
+_add_tool(
+    AgentCoreCodeInterpreter(**({"identifier": _code_interpreter_id} if _code_interpreter_id else {})).code_interpreter,
+    "{{codeInterpreterToolName}}",
+    "agentcore_code_interpreter",
+)
 {{else}}
-tools.append(AgentCoreCodeInterpreter().code_interpreter)
+_add_tool(
+    AgentCoreCodeInterpreter().code_interpreter,
+    "{{codeInterpreterToolName}}",
+    "agentcore_code_interpreter",
+)
 {{/if}}
-{{/if}}
-{{#if hasShell}}
-@tool
-def shell(command: str, timeout: int = 300) -> dict:
-    """Execute a bash command and return the results.
-
-    Args:
-        command: The bash command to execute
-        timeout: Timeout in seconds (default: 300)
-
-    Returns:
-        Dict with stdout, stderr, and exit_code
-    """
-    result = subprocess.run(
-        command, shell=True, capture_output=True, text=True, timeout=timeout
-    )
-    return {"stdout": result.stdout, "stderr": result.stderr, "exit_code": result.returncode}
-
-tools.append(shell)
-{{/if}}
-{{#if hasFileOperations}}
-@tool
-def file_operations(
-    command: str,
-    path: str,
-    old_str: str = None,
-    new_str: str = None,
-    file_text: str = None,
-    insert_line: int = None,
-    view_range: list = None,
-) -> str:
-    """Text editor tool for viewing and modifying files.
-
-    Args:
-        command: The command to execute ("view", "str_replace", "create", "insert")
-        path: Path to the file or directory
-        old_str: Text to replace (for str_replace command)
-        new_str: Replacement text (for str_replace and insert commands)
-        file_text: Content for new file (for create command)
-        insert_line: Line number to insert after (for insert command)
-        view_range: [start_line, end_line] for viewing specific lines (for view command)
-
-    Returns:
-        Result of the operation
-    """
-    try:
-        if command == "view":
-            if not os.path.exists(path):
-                return f"Error: Path '{path}' does not exist"
-            if os.path.isdir(path):
-                return "\n".join(os.listdir(path))
-            with open(path) as f:
-                lines = f.read().splitlines()
-            if view_range:
-                start, end = view_range
-                start_idx = max(0, start - 1)
-                end_idx = len(lines) if end == -1 else min(len(lines), end)
-                lines = lines[start_idx:end_idx]
-                start_num = start_idx + 1
-            else:
-                start_num = 1
-            return "\n".join(f"{start_num + i}: {line}" for i, line in enumerate(lines))
-        elif command == "str_replace":
-            if old_str is None or new_str is None:
-                return "Error: str_replace requires both old_str and new_str parameters"
-            if not os.path.exists(path):
-                return f"Error: File '{path}' does not exist"
-            content = open(path).read()
-            if old_str not in content:
-                return "Error: Text not found in file"
-            count = content.count(old_str)
-            if count > 1:
-                return f"Error: Text appears {count} times in file. Please be more specific."
-            open(path, "w").write(content.replace(old_str, new_str, 1))
-            return f"Successfully replaced text in '{path}'"
-        elif command == "create":
-            if file_text is None:
-                return "Error: create requires file_text parameter"
-            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-            open(path, "w").write(file_text)
-            return f"Successfully created file '{path}'"
-        elif command == "insert":
-            if new_str is None or insert_line is None:
-                return "Error: insert requires both new_str and insert_line parameters"
-            if not os.path.exists(path):
-                return f"Error: File '{path}' does not exist"
-            lines = open(path).read().splitlines(True)
-            if insert_line == 0:
-                lines.insert(0, new_str + "\n")
-            elif insert_line >= len(lines):
-                lines.append(new_str + "\n")
-            else:
-                lines.insert(insert_line, new_str + "\n")
-            open(path, "w").write("".join(lines))
-            return f"Successfully inserted text in '{path}' at line {insert_line + 1}"
-        else:
-            return f"Error: Unknown command '{command}'"
-    except Exception as e:
-        return f"Error: {e}"
-
-tools.append(file_operations)
 {{/if}}
 {{#if needsOs}}{{#unless isExportHarness}}
 _MOUNT_PATHS = [
@@ -322,22 +227,30 @@ def list_files(path: str) -> str:
     except OSError as e:
         return f"Error listing '{path}': {e.strerror}"
 
-tools.extend([file_read, file_write, list_files])
+for mounted_tool in (file_read, file_write, list_files):
+    _add_tool(mounted_tool, "builtin", "builtin")
 {{/unless}}{{/if}}
 
-{{#if (or hasGateway remoteMcpTools)}}
-# Add MCP clients to tools
-for mcp_client in mcp_clients:
+{{#if hasGateway}}
+# Add configured AgentCore Gateway providers. Harness exports defer loading so
+# collision handling runs after the remote tool names are known.
+for mcp_client in get_all_gateway_mcp_clients():
     if mcp_client:
-        tools.append(mcp_client)
-{{else}}
+        _add_tool(mcp_client, mcp_client.client_name or "gateway", "agentcore_gateway")
+{{/if}}
+{{#if remoteMcpTools}}
+for mcp_client in get_all_remote_mcp_clients():
+    if mcp_client:
+        _add_tool(mcp_client, mcp_client.client_name or "remote_mcp", "remote_mcp")
+{{/if}}
+{{#unless (or hasGateway remoteMcpTools)}}
 {{#unless isExportHarness}}
 # Add MCP client to tools if available
-for mcp_client in mcp_clients:
+for mcp_client in [get_streamable_http_mcp_client()]:
     if mcp_client:
-        tools.append(mcp_client)
+        _add_tool(mcp_client, "example_mcp", "remote_mcp")
 {{/unless}}
-{{/if}}
+{{/unless}}
 
 {{#if hasConfigBundle}}
 
@@ -392,6 +305,59 @@ def _make_conversation_manager():
     return NullConversationManager()
 {{/if}}
 
+{{#if isExportHarness}}
+def _create_agent(runtime_session_id="default-session", **kwargs):
+    consumer_plugins = list(kwargs.pop("plugins", None) or [])
+    skill_paths = list(kwargs.pop("skill_paths", None) or [])
+    parent_plugins = list(consumer_plugins)
+    {{#if hasSkillsFetcher}}
+    if skill_paths:
+        parent_plugins.append(AgentSkills(skills=skill_paths))
+    {{/if}}
+    {{#if hasHarnessContextOffloader}}
+    parent_plugins.append(create_context_offloader(runtime_session_id))
+    {{/if}}
+    tool_entries = [
+        *build_managed_builtin_tools({{safeJson harnessBuiltinTools}}),
+        *list(kwargs.pop("tools", None) or []),
+    ]
+    hooks = list(kwargs.get("hooks", None) or [])
+    provider = ManagedToolProvider(
+        tool_entries,
+        model=kwargs.get("model"),
+        system_prompt=kwargs.get("system_prompt", DEFAULT_SYSTEM_PROMPT),
+        conversation_manager_factory=_make_conversation_manager,
+        hooks=hooks,
+        consumer_plugins=consumer_plugins,
+        skill_paths=skill_paths,
+        session_id=runtime_session_id,
+        enable_todos={{#if (includes harnessBuiltinPlugins "todos")}}True{{else}}False{{/if}},
+        enable_context_offloader={{#if hasHarnessContextOffloader}}True{{else}}False{{/if}},
+        enable_subagent={{#if hasHarnessSubagent}}True{{else}}False{{/if}},
+    )
+    agent = create_harness(
+        builtin_tools=[],
+        background_tasks=False,
+        caching=False,
+        context_manager=False,
+        session=False,
+        skills=False,
+        memory=False,
+        builtin_plugins={{safeJson harnessBuiltinPlugins}},
+        tools=[provider],
+        plugins=parent_plugins or None,
+        **kwargs,
+    )
+    agent._export_inline_function_names = provider.inline_function_names
+    agent._export_invocation_hooks = [
+        hook for hook in hooks if callable(getattr(hook, "start_invocation", None))
+    ]
+    return agent
+{{else}}
+def _create_agent(**kwargs):
+    return Agent(**kwargs)
+{{/if}}
+
 {{#if hasMemory}}
 {{#unless hasPayment}}
 def agent_factory():
@@ -404,14 +370,21 @@ def agent_factory():
         {{/if}}
         key = f"{session_id}/{_actor_id}"
         if key not in cache:
-            cache[key] = Agent(
+            cache[key] = _create_agent(
+                {{#if isExportHarness}}
+                runtime_session_id=session_id,
+                {{/if}}
                 model=load_model(),
                 session_manager=get_memory_session_manager(session_id, _actor_id),
                 conversation_manager=_make_conversation_manager(),
                 system_prompt=DEFAULT_SYSTEM_PROMPT,
                 tools=tools,
                 {{#if hasSkillsFetcher}}
+                {{#if isExportHarness}}
+                skill_paths=skill_plugins or [],
+                {{else}}
                 plugins=skill_plugins or None,
+                {{/if}}
                 {{/if}}
                 {{#if hasExecutionLimits}}
                 tool_executor=SequentialToolExecutor(),
@@ -449,13 +422,20 @@ def agent_factory():
             return cache[session_id]
         if len(cache) >= 128:
             cache.popitem(last=False)
-        cache[session_id] = Agent(
+        cache[session_id] = _create_agent(
+            {{#if isExportHarness}}
+            runtime_session_id=session_id,
+            {{/if}}
             model=load_model(),
             system_prompt=DEFAULT_SYSTEM_PROMPT,
             tools=tools,
             conversation_manager=_make_conversation_manager(),
             {{#if hasSkillsFetcher}}
+            {{#if isExportHarness}}
+            skill_paths=skill_plugins or [],
+            {{else}}
             plugins=skill_plugins or None,
+            {{/if}}
             {{/if}}
             {{#if hasExecutionLimits}}
             tool_executor=SequentialToolExecutor(),
@@ -530,26 +510,28 @@ def _extract_prompt(payload: dict):
     return prompt
 
 
-def _has_inline_function_call(messages) -> bool:
+def _has_inline_function_call(messages, inline_function_names=None) -> bool:
     """Return True if messages contains an assistant toolUse for an inline function tool."""
-    if not _INLINE_FUNCTION_NAMES or not isinstance(messages, list):
+    names = _INLINE_FUNCTION_NAMES if inline_function_names is None else inline_function_names
+    if not names or not isinstance(messages, list):
         return False
     for msg in messages:
         if msg.get("role") == "assistant":
             for block in msg.get("content", []):
-                if isinstance(block, dict) and block.get("toolUse", {}).get("name") in _INLINE_FUNCTION_NAMES:
+                if isinstance(block, dict) and block.get("toolUse", {}).get("name") in names:
                     return True
     return False
 
 
-def _is_inline_function_call(event: dict) -> bool:
+def _is_inline_function_call(event: dict, inline_function_names=None) -> bool:
     """Check if a contentBlockStart event is for an inline function tool."""
-    if not _INLINE_FUNCTION_NAMES:
+    names = _INLINE_FUNCTION_NAMES if inline_function_names is None else inline_function_names
+    if not names:
         return False
     cbs = event.get("contentBlockStart", {})
     start = cbs.get("start", {})
     tool_use = start.get("toolUse") if isinstance(start, dict) else None
-    return tool_use is not None and tool_use.get("name") in _INLINE_FUNCTION_NAMES
+    return tool_use is not None and tool_use.get("name") in names
 
 
 
@@ -583,7 +565,11 @@ async def invoke(payload, context):
     {{/if}}
     skill_paths.extend(await asyncio.to_thread(resolve_git_skills, git_skill_sources, _git_identity_client))
     {{/if}}
+    {{#if isExportHarness}}
+    _skill_plugins = skill_paths
+    {{else}}
     _skill_plugins = [AgentSkills(skills=skill_paths)] if skill_paths else []
+    {{/if}}
 {{/if}}
 
 {{#if hasMemory}}
@@ -594,12 +580,16 @@ async def invoke(payload, context):
     {{else}}
     mem_user_id = getattr(context, 'user_id', 'default-user')
     {{/if}}
-    agent = Agent(
+    agent = _create_agent(
+        {{#if isExportHarness}}
+        runtime_session_id=mem_session_id,
+        {{/if}}
         model=load_model(),
         session_manager=get_memory_session_manager(mem_session_id, mem_user_id),
         system_prompt=DEFAULT_SYSTEM_PROMPT + PAYMENT_SYSTEM_PROMPT,
         tools=tools,
-        plugins=plugins{{#if hasSkillsFetcher}} + _skill_plugins{{/if}},{{#if hasConfigBundle}}
+        plugins=plugins{{#if hasSkillsFetcher}}{{#unless isExportHarness}} + _skill_plugins{{/unless}}{{/if}},
+        {{#if hasSkillsFetcher}}{{#if isExportHarness}}skill_paths=_skill_plugins,{{/if}}{{/if}}{{#if hasConfigBundle}}
         hooks=[ConfigBundleHook()],{{/if}}
     )
 {{else}}
@@ -613,11 +603,15 @@ async def invoke(payload, context):
 {{/if}}
 {{else}}
 {{#if hasPayment}}
-    agent = Agent(
+    agent = _create_agent(
+        {{#if isExportHarness}}
+        runtime_session_id=getattr(context, 'session_id', 'default-session'),
+        {{/if}}
         model=load_model(),
         system_prompt=DEFAULT_SYSTEM_PROMPT + PAYMENT_SYSTEM_PROMPT,
         tools=tools,
-        plugins=plugins{{#if hasSkillsFetcher}} + _skill_plugins{{/if}},{{#if hasConfigBundle}}
+        plugins=plugins{{#if hasSkillsFetcher}}{{#unless isExportHarness}} + _skill_plugins{{/unless}}{{/if}},
+        {{#if hasSkillsFetcher}}{{#if isExportHarness}}skill_paths=_skill_plugins,{{/if}}{{/if}}{{#if hasConfigBundle}}
         hooks=[ConfigBundleHook()],{{/if}}
     )
 {{else}}
@@ -627,12 +621,16 @@ async def invoke(payload, context):
 {{/if}}
 
     prompt = _extract_prompt(payload)
+    inline_function_names = getattr(agent, "_export_inline_function_names", _INLINE_FUNCTION_NAMES)
+
+    for invocation_hook in getattr(agent, "_export_invocation_hooks", []):
+        invocation_hook.start_invocation()
 
     {{#if inlineFunctionTools}}
     # If Turn 2 carries the harness-style assistant(toolUse)+user(toolResult) pair,
     # strip the placeholder turn Strands stored during Turn 1 so the real toolResult
     # is injected cleanly — same protocol as the harness runtime.
-    if _has_inline_function_call(prompt):
+    if _has_inline_function_call(prompt, inline_function_names):
         msgs = agent.messages
         if len(msgs) >= 2 and any("toolResult" in b for b in msgs[-1].get("content", [])):
             del msgs[-2:]
@@ -664,7 +662,7 @@ async def invoke(payload, context):
                 continue
             {{#if inlineFunctionTools}}
             if not hit_inline_function:
-                hit_inline_function = _is_inline_function_call(event["event"])
+                hit_inline_function = _is_inline_function_call(event["event"], inline_function_names)
             {{/if}}
             yield event
             {{#if inlineFunctionTools}}
@@ -700,7 +698,7 @@ async def invoke(payload, context):
             continue
         {{#if inlineFunctionTools}}
         if not hit_inline_function:
-            hit_inline_function = _is_inline_function_call(event["event"])
+            hit_inline_function = _is_inline_function_call(event["event"], inline_function_names)
         {{/if}}
         yield event
         {{#if inlineFunctionTools}}

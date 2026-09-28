@@ -41,13 +41,26 @@ def get_{{snakeCase name}}_mcp_client() -> MCPClient | None:
         return None
     {{/if}}
     {{#if (eq authType "AWS_IAM")}}
-    return MCPClient(lambda: aws_iam_streamablehttp_client(url, aws_service="bedrock-agentcore", aws_region=os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION"))), prefix="{{snakeCase name}}")
+    return MCPClient(
+        lambda: aws_iam_streamablehttp_client(
+            url,
+            aws_service="bedrock-agentcore",
+            aws_region=os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION")),
+        ),
+        {{#if ../isExportHarness}}application_name={{safeJson name}}{{else}}prefix="{{snakeCase name}}"{{/if}},
+    )
     {{else if (eq authType "CUSTOM_JWT")}}
     token = _get_bearer_token_{{snakeCase name}}()
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    return MCPClient(lambda: streamablehttp_client(url, headers=headers), prefix="{{snakeCase name}}")
+    return MCPClient(
+        lambda: streamablehttp_client(url, headers=headers),
+        {{#if ../isExportHarness}}application_name={{safeJson name}}{{else}}prefix="{{snakeCase name}}"{{/if}},
+    )
     {{else}}
-    return MCPClient(lambda: streamablehttp_client(url), prefix="{{snakeCase name}}")
+    return MCPClient(
+        lambda: streamablehttp_client(url),
+        {{#if ../isExportHarness}}application_name={{safeJson name}}{{else}}prefix="{{snakeCase name}}"{{/if}},
+    )
     {{/if}}
 
 {{/each}}
@@ -83,9 +96,15 @@ def get_{{snakeCase name}}_mcp_client() -> MCPClient | None:
         headers = { {{#each headerCredentials}}{{safeJson headerKey}}: os.environ.get("{{envVarName}}", ""){{#unless @last}}, {{/unless}}{{/each}} }
     else:
         headers = { {{#each headerCredentials}}{{safeJson headerKey}}: _get_{{snakeCase ../name}}_{{snakeCase headerKey}}_key(){{#unless @last}}, {{/unless}}{{/each}} }
-    return MCPClient(lambda: streamablehttp_client(url, headers=headers))
+    return MCPClient(
+        lambda: streamablehttp_client(url, headers=headers),
+        {{#if ../isExportHarness}}application_name={{safeJson name}}{{/if}}
+    )
     {{else}}
-    return MCPClient(lambda: streamablehttp_client(url))
+    return MCPClient(
+        lambda: streamablehttp_client(url),
+        {{#if ../isExportHarness}}application_name={{safeJson name}}{{/if}}
+    )
     {{/if}}
 
 {{/each}}

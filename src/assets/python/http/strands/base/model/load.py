@@ -61,11 +61,22 @@ def load_model():
     {{/if}}
 {{else}}
 from strands.models.bedrock import BedrockModel
+{{#if isExportHarness}}
+from strands.models import CacheConfig
+{{/if}}
 
 
 def load_model() -> BedrockModel:
     """Get Bedrock model client using IAM credentials."""
-    return BedrockModel(model_id="{{#if modelId}}{{modelId}}{{else}}global.anthropic.claude-sonnet-4-5-20250929-v1:0{{/if}}"{{#if modelMaxTokens}}, max_tokens={{modelMaxTokens}}{{/if}})
+    return BedrockModel(
+        model_id="{{#if modelId}}{{modelId}}{{else}}global.anthropic.claude-sonnet-4-5-20250929-v1:0{{/if}}"{{#if modelMaxTokens}},
+        max_tokens={{modelMaxTokens}}{{/if}}{{#if isExportHarness}},
+        cache_config=CacheConfig(
+            strategy="auto",
+            system_prompt_ttl=True,
+            tools_ttl=True,
+        ){{/if}},
+    )
 {{/if}}
 {{/if}}
 {{#if (eq modelProvider "Anthropic")}}
