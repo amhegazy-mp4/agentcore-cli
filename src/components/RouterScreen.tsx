@@ -6,6 +6,7 @@ import {
   CommandKey,
   commandMenuSectionStart,
   isListedInMenu,
+  isProjectRequired,
   isTuiCommandSupported,
 } from "../router";
 import { Layout } from "./Layout";
@@ -15,6 +16,7 @@ import { TextInput } from "./ui/text-input";
 import { darkTheme, glyphs } from "./ui/_core.js";
 import type { ScreenProps } from "../handlers/types";
 import { RegionPinContext } from "../handlers/utils";
+import { useNoProjectDetected } from "../handlers/project/ProjectGate";
 
 const theme = darkTheme;
 const PLACEHOLDER = "type to choose a command";
@@ -57,6 +59,7 @@ interface Option {
   cliOnly: boolean;
   // section is the divider title this option is listed under, if any.
   section?: string;
+  projectRequired?: boolean;
 }
 
 export interface TuiOnlyCommand {
@@ -94,6 +97,7 @@ export function RouterScreen(props: RouterScreenProps) {
 }
 
 function CommandMenu({
+  core,
   path,
   tuiOnlyCommands = [],
   optionHints,
@@ -101,6 +105,7 @@ function CommandMenu({
   command,
 }: RouterScreenProps & { command: Command }) {
   const navigate = useNavigate();
+  const noProject = useNoProjectDetected(core);
   const { isRawModeSupported } = useStdin();
   const { exit } = useApp();
 
@@ -131,6 +136,7 @@ function CommandMenu({
         hint: optionHints?.[c.name()],
         cliOnly,
         section: cliOnly ? CLI_ONLY_SECTION : sectionOf(index),
+        projectRequired: isProjectRequired(c),
       };
     });
     const actualNames = new Set(actual.map((option) => option.name));
@@ -254,7 +260,7 @@ function CommandMenu({
                       color={
                         isHl
                           ? theme.colors.focus
-                          : o.cliOnly
+                          : o.cliOnly || (o.projectRequired && noProject)
                             ? theme.colors.muted
                             : theme.colors.text
                       }
