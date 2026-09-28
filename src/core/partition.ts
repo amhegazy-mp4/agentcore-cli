@@ -26,26 +26,27 @@ export async function isChinaContext(cwd: string = process.cwd()): Promise<boole
 
   // Mirror project discovery: walk up to the first directory containing
   // agentcore/agentcore.json, then inspect its aws-targets.json.
-  for (let dir = cwd; ; dir = dirname(dir)) {
-    if (existsSync(join(dir, "agentcore", "agentcore.json"))) {
-      try {
-        const raw = await readFile(join(dir, "agentcore", "aws-targets.json"), "utf8");
-        const targets: unknown = JSON.parse(raw);
-        return (
-          Array.isArray(targets) &&
-          targets.some(
-            (target) =>
-              typeof target === "object" &&
-              target !== null &&
-              "region" in target &&
-              typeof target.region === "string" &&
-              isChinaRegion(target.region),
-          )
-        );
-      } catch {
-        return false;
-      }
-    }
-    if (dirname(dir) === dir) return false;
+  let dir = cwd;
+  while (!existsSync(join(dir, "agentcore", "agentcore.json"))) {
+    const parent = dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+  try {
+    const raw = await readFile(join(dir, "agentcore", "aws-targets.json"), "utf8");
+    const targets: unknown = JSON.parse(raw);
+    return (
+      Array.isArray(targets) &&
+      targets.some(
+        (target) =>
+          typeof target === "object" &&
+          target !== null &&
+          "region" in target &&
+          typeof target.region === "string" &&
+          isChinaRegion(target.region),
+      )
+    );
+  } catch {
+    return false;
   }
 }
