@@ -50,6 +50,7 @@ export function commandPath(command: Command): string[] {
 interface Option {
   name: string;
   description: string;
+  hint?: string;
   // cliOnly marks a subcommand without a screen; it is listed under a divider
   // and opens its help instead.
   cliOnly: boolean;
@@ -70,6 +71,10 @@ export interface RouterScreenProps extends ScreenProps {
   // tuiOnlyCommands are navigable informational flows that intentionally do
   // not exist in the CLI command tree.
   tuiOnlyCommands?: TuiOnlyCommand[];
+  // optionHints adds short contextual guidance alongside selected menu options.
+  optionHints?: Readonly<Record<string, string>>;
+  // banner is optional guidance rendered between the filter and menu options.
+  banner?: string;
 }
 
 // RouterScreen renders the interactive command menu for a Router node: a filter
@@ -90,6 +95,8 @@ export function RouterScreen(props: RouterScreenProps) {
 function CommandMenu({
   path,
   tuiOnlyCommands = [],
+  optionHints,
+  banner,
   command,
 }: RouterScreenProps & { command: Command }) {
   const navigate = useNavigate();
@@ -120,6 +127,7 @@ function CommandMenu({
       return {
         name: c.name(),
         description: c.description(),
+        hint: optionHints?.[c.name()],
         cliOnly,
         section: cliOnly ? CLI_ONLY_SECTION : sectionOf(index),
       };
@@ -127,13 +135,13 @@ function CommandMenu({
     const actualNames = new Set(actual.map((option) => option.name));
     const tuiOnly = tuiOnlyCommands
       .filter((option) => !actualNames.has(option.name))
-      .map((option) => ({ ...option, cliOnly: false }));
+      .map((option) => ({ ...option, hint: optionHints?.[option.name], cliOnly: false }));
     return [
       ...tuiOnly,
       ...actual.filter((option) => !option.cliOnly),
       ...actual.filter((option) => option.cliOnly),
     ];
-  }, [command, tuiOnlyCommands]);
+  }, [command, optionHints, tuiOnlyCommands]);
 
   const [query, setQuery] = useState("");
   const [index, setIndex] = useState(0);
@@ -221,6 +229,14 @@ function CommandMenu({
 
         <Divider />
 
+        {banner && (
+          <Box paddingX={1} paddingY={1}>
+            <Text bold color={theme.colors.warning}>
+              {banner}
+            </Text>
+          </Box>
+        )}
+
         {/* Options */}
         <Box flexDirection="column">
           {filtered.length === 0 ? (
@@ -251,6 +267,7 @@ function CommandMenu({
                       {o.name.padEnd(nameWidth)}
                     </Text>
                     <Text color={theme.colors.muted}>{o.description}</Text>
+                    {o.hint && <Text color={theme.colors.focus}> {o.hint}</Text>}
                   </Box>
                 </React.Fragment>
               );
