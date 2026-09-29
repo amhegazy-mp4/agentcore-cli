@@ -16,6 +16,7 @@ import path from "path";
 import { OtelHistogramSink } from "./otelSink";
 import { PACKAGE_VERSION } from "../constants";
 import { isChinaContext } from "../core/partition";
+import { regionFlagFromArgv, resolveRegion } from "../core/region";
 
 export type DefaultTelemetryClientConfig = {
   logger: Logger;
@@ -23,6 +24,8 @@ export type DefaultTelemetryClientConfig = {
   sessionId: string;
   metricSinks?: MetricSink[];
   auditFilePath?: string;
+  /** Raw process argv, used to honor an explicit --region for the China telemetry gate. */
+  argv?: readonly string[];
 };
 
 /**
@@ -34,12 +37,14 @@ export class DefaultTelemetryClient implements TelemetryClient {
   private readonly auditFilePath: string;
   private globalConfigAccessor: GlobalConfigAccessor;
   private readonly metricSinksOverride: MetricSink[] | undefined;
+  private readonly argv: readonly string[];
 
   constructor(config: DefaultTelemetryClientConfig) {
     this.logger = config.logger;
     this.sessionId = config.sessionId;
     this.globalConfigAccessor = config.globalConfigAccessor;
     this.metricSinksOverride = config.metricSinks;
+    this.argv = config.argv ?? [];
     this.auditFilePath =
       config.auditFilePath ??
       path.join(os.homedir(), ".agentcore", "telemetry", `${this.sessionId}.jsonl`);
@@ -90,9 +95,16 @@ export class DefaultTelemetryClient implements TelemetryClient {
 
     // Telemetry is unconditionally disabled in a China (aws-cn) context —
     // regardless of config or endpoint overrides — to comply with the
-    // restrictions on sending telemetry out of the region. The audit file sink
-    // above is unaffected (it only writes locally).
-    if (globalConfig.telemetry.enabled && !telemetryDisabledByEnv() && !(await isChinaContext()))
+    // restrictions on sending telemetry out of the region. The region is
+    // resolved through the same chain the CLI itself uses (--region flag, env
+    // vars, shared config file). The audit file sink above is unaffected (it
+    // only writes locally).
+    const resolvedRegion = await resolveRegion(regionFlagFromArgv(this.argv));
+    if (
+      globalConfig.telemetry.enabled &&
+      !telemetryDisabledByEnv() &&
+      !(await isChinaContext({ region: resolvedRegion }))
+    )
       metricSinks.push(
         new OtelHistogramSink({
           logger: this.logger.child({ module: "otelCollectorSink" }),

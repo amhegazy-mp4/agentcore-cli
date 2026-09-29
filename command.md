@@ -160,6 +160,7 @@ create a new AgentCore project
 - `--name <name>`: name of the project to create (required)
 - `--template <template>`: the template to scaffold the Runtime from; some templates also accept --model-provider/--api-key
 - `--model-provider <model-provider>`: model provider for templates that support it: bedrock, anthropic, open\_ai, gemini, or lite\_llm
+- `--model-id <model-id>`: model id for the scaffolded Runtime code, overriding the provider's default (required with lite\_llm in China regions)
 - `--api-key <api-key>`: API key for non-Bedrock providers: '-' for stdin, 'file://path' for file
 - `--skip-install`: skip installing dependencies (npm install, uv sync) (default: false)
 - `--skip-git`: skip initializing a git repository (default: false)
@@ -200,29 +201,29 @@ add a harness to the current project
 **Options**
 
 - `--name <name>`: the name of the harness
-- `--execution-role-arn <execution-role-arn>`: IAM role the harness assumes; a default role is created when omitted
-- `--system-prompt <system-prompt>`: the agent's system prompt
 - `--model <model>`: model configuration (JSON)
+- `--system-prompt <system-prompt>`: the agent's system prompt
+- `--tags <tags...>`: tags as key=value (repeatable) or JSON object
 - `--tools <tools>`: tools available to the agent (JSON)
-- `--skills <skills>`: skills available to the agent (JSON)
 - `--allowed-tools <allowed-tools...>`: tool allowlist patterns (e.g. \* or @serverName/toolName)
+- `--skills <skills>`: skills available to the agent (JSON)
 - `--memory <memory>`: memory configuration (JSON)
 - `--truncation <truncation>`: context truncation configuration (JSON)
-- `--network-mode <network-mode>`: network mode for the harness environment (PUBLIC or VPC)
-- `--network-config <network-config>`: VPC network configuration (JSON)
-- `--lifecycle-config <lifecycle-config>`: lifecycle configuration (JSON)
-- `--session-storage-path <session-storage-path>`: mount path for session storage
-- `--efs-access-points <efs-access-points>`: EFS access point configurations (JSON)
-- `--s3-access-points <s3-access-points>`: S3 access point configurations (JSON)
-- `--environment-variables <environment-variables>`: environment variables (JSON object of key/value strings)
-- `--container-uri <container-uri>`: ECR container image URI
-- `--authorizer-type <authorizer-type>`: inbound authorizer type (AWS\_IAM or CUSTOM\_JWT)
-- `--authorizer-configuration <authorizer-configuration>`: inbound authorizer configuration (JSON)
 - `--max-iterations <max-iterations>`: max agent loop iterations per invocation
 - `--max-tokens <max-tokens>`: max total output tokens per invocation
 - `--timeout-seconds <timeout-seconds>`: max duration in seconds per invocation
-- `--tags <tags...>`: tags as key=value (repeatable) or JSON object
-- `--dockerfile <dockerfile>`: path to local dockerfile to use as the container image for the harness
+- `--container-uri <container-uri>`: ECR container image URI; alternative to --dockerfile
+- `--dockerfile <dockerfile>`: path to local Dockerfile to build the harness image; alternative to --container-uri
+- `--environment-variables <environment-variables>`: environment variables (JSON object of key/value strings)
+- `--network-mode <network-mode>`: network mode for the harness environment (PUBLIC or VPC)
+- `--network-config <network-config>`: VPC network configuration (JSON)
+- `--lifecycle-config <lifecycle-config>`: session idle timeout and instance lifetime configuration (JSON)
+- `--session-storage-path <session-storage-path>`: mount path for session storage
+- `--efs-access-points <efs-access-points>`: EFS access point configurations (JSON; requires VPC)
+- `--s3-access-points <s3-access-points>`: S3 access point configurations (JSON; requires VPC)
+- `--execution-role-arn <execution-role-arn>`: IAM role the harness assumes; a default role is created when omitted
+- `--authorizer-type <authorizer-type>`: inbound authorizer type (AWS\_IAM or CUSTOM\_JWT)
+- `--authorizer-configuration <authorizer-configuration>`: inbound authorizer configuration (JSON)
 
 #### `agentcore add memory`
 
@@ -255,26 +256,26 @@ add a Runtime to the current project
 **Options**
 
 - `--name <name>`: the name of the Runtime (required)
-- `--description <description>`: an optional description of the Runtime
-- `--type <type>`: create scaffolds new agent code (the default); import translates a Bedrock Agent version
-- `--agent-id <agent-id>`: Bedrock Agent ID to import (requires --type import)
-- `--agent-alias-id <agent-alias-id>`: Bedrock Agent Alias ID selecting the version to import; must point at a prepared version, not DRAFT (requires --type import)
-- `--template <template>`: a preset of flags for scaffolding the Runtime; compatible flags override preset values
-- `--framework <framework>`: agent framework for an imported Bedrock Agent: strands or langgraph (requires --type import)
-- `--model-provider <model-provider>`: model provider for the scaffolded Runtime code (Bedrock, Anthropic, OpenAI, or Gemini)
+- `--type <type>`: create generates new agent code (the default); import translates a Bedrock Agent version
+- `--template <template>`: template for the Runtime code (default: agent-python-minimal); available templates listed below
+- `--model-provider <model-provider>`: model provider for supported templates (Bedrock, Anthropic, OpenAI, Gemini, or LiteLLM)
 - `--model-id <model-id>`: model id for the scaffolded Runtime code, overriding the provider's default (required with litellm in China regions)
-- `--api-key <api-key>`: API key for non-Bedrock providers: '-' for stdin, 'file://path' for file
-- `--role-arn <role-arn>`: IAM role ARN that provides permissions for the Runtime
-- `--additional-policies <additional-policies...>`: additional IAM policy ARNs or policy document paths for the execution role
+- `--api-key <api-key>`: API key for non-Bedrock providers on supported templates; '-' for stdin, 'file://path' for file
+- `--description <description>`: an optional description of the Runtime
+- `--tags <tags...>`: tags as key=value (repeatable) or JSON object
+- `--environment-variables <environment-variables>`: environment variables (JSON object of key/value strings)
 - `--network-mode <network-mode>`: network mode for the Runtime environment (PUBLIC or VPC)
 - `--network-config <network-config>`: VPC network configuration (JSON)
+- `--lifecycle-configuration <lifecycle-configuration>`: session idle timeout and instance lifetime configuration (JSON)
+- `--filesystem-configurations <filesystem-configurations>`: filesystem mount configurations (JSON)
+- `--role-arn <role-arn>`: IAM role ARN that provides permissions for the Runtime
+- `--additional-policies <additional-policies...>`: additional IAM policy ARNs or policy document paths for the execution role
 - `--authorizer-type <authorizer-type>`: inbound authorizer type (AWS\_IAM or CUSTOM\_JWT)
 - `--authorizer-configuration <authorizer-configuration>`: inbound authorizer configuration (JSON)
 - `--request-header-allowlist <request-header-allowlist...>`: request headers to pass through to the Runtime
-- `--lifecycle-configuration <lifecycle-configuration>`: lifecycle configuration (JSON)
-- `--environment-variables <environment-variables>`: environment variables (JSON object of key/value strings)
-- `--filesystem-configurations <filesystem-configurations>`: filesystem mount configurations (JSON)
-- `--tags <tags...>`: tags as key=value (repeatable) or JSON object
+- `--agent-id <agent-id>`: Bedrock Agent ID to import (requires --type import)
+- `--agent-alias-id <agent-alias-id>`: Bedrock Agent Alias ID selecting the version to import; must point at a prepared version, not DRAFT (requires --type import)
+- `--framework <framework>`: agent framework for an imported Bedrock Agent: strands or langgraph (requires --type import)
 
 #### `agentcore add online-eval`
 

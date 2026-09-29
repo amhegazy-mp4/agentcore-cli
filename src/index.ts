@@ -52,6 +52,7 @@ process.exit(
       logger: rootLogger.child({ module: "telemetry" }),
       sessionId: cliSessionId,
       globalConfigAccessor,
+      argv,
     });
 
     const commandRunMetricEvent = telemetryClient.createMetricEvent("cli.command_run", {

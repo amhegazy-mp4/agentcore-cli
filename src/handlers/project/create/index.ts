@@ -25,8 +25,14 @@ import {
   HarnessSpecSchema,
   type HarnessModelProvider,
 } from "../../../projectSchemas/harness";
-import { InputValidationError } from "../../../errors";
-import { JsonKey } from "../../keys";
+import { InputValidationError, RegionUnsupportedFeatureError } from "../../../errors";
+import { isChinaRegion } from "../../../core/partition";
+import {
+  HARNESS_CN_MESSAGE,
+  LITELLM_MODEL_ID_REQUIRED_CN_MESSAGE,
+  MODEL_PROVIDER_RUNTIMES_CN_MESSAGE,
+} from "../../../core/project/manager";
+import { JsonKey, RegionKey } from "../../keys";
 import { renderResult } from "../../utils";
 import { projectReference, type ProjectMutationResult } from "../output";
 
@@ -67,6 +73,12 @@ export const createCreateProjectHandler = (config: CreateProjectHandlerConfig) =
         ModelProviderFlagSchema.optional(),
       ),
       flag(
+        "model-id",
+        "model id for the scaffolded Runtime code, overriding the provider's default " +
+          "(required with lite_llm in China regions)",
+        z.string().min(1).optional(),
+      ),
+      flag(
         "api-key",
         "API key for non-Bedrock providers: '-' for stdin, 'file://path' for file",
         z.string().optional(),
@@ -91,7 +103,7 @@ export const createCreateProjectHandler = (config: CreateProjectHandlerConfig) =
       const modelProviderFlag = flags["model-provider"];
       const apiKeyFlag = flags["api-key"];
 
-      const runtimeCodeFlags = (["model-provider", "api-key"] as const).filter(
+      const runtimeCodeFlags = (["model-provider", "model-id", "api-key"] as const).filter(
         (flagName) => flags[flagName] !== undefined,
       );
       if (runtimeCodeFlags.length > 0) {
@@ -115,20 +127,35 @@ export const createCreateProjectHandler = (config: CreateProjectHandlerConfig) =
 
       let createInput: CreateProjectInput;
       if (template === undefined) {
+        // The default (no --template) creates a harness project, which is not
+        // part of the China launch.
+        if (isChinaRegion(ctx.require(RegionKey))) {
+          throw new RegionUnsupportedFeatureError(HARNESS_CN_MESSAGE);
+        }
         createInput = { ...base, scaffoldHarnessInput: resolveScaffoldHarnessInput({ name }) };
       } else if (template === EMPTY_TEMPLATE_NAME) {
         createInput = { ...base };
       } else {
         const source = new SourceResolver({ stdin: config.io.stdin });
         const apiKey = await source.resolveSecret("api-key", apiKeyFlag);
-        createInput = {
-          ...base,
-          scaffoldRuntimeInput: resolveRuntimeTemplateShortcut(template, {
-            runtimeName: DEFAULT_CREATE_RUNTIME_NAME,
-            modelProvider: resolveRuntimeModelProvider(modelProviderFlag),
-            apiKey,
-          }),
-        };
+        const scaffoldRuntimeInput = resolveRuntimeTemplateShortcut(template, {
+          runtimeName: DEFAULT_CREATE_RUNTIME_NAME,
+          modelProvider: resolveRuntimeModelProvider(modelProviderFlag),
+          modelId: flags["model-id"],
+          apiKey,
+        });
+        // Apply the China gate at creation when the command's resolved region
+        // (--region flag, env, or profile) already says aws-cn, so the most
+        // common workflow fails before scaffolding instead of at deploy.
+        if (isChinaRegion(ctx.require(RegionKey)) && scaffoldRuntimeInput.framework !== "none") {
+          if ((scaffoldRuntimeInput.modelProvider ?? "Bedrock") !== "LiteLLM") {
+            throw new RegionUnsupportedFeatureError(MODEL_PROVIDER_RUNTIMES_CN_MESSAGE);
+          }
+          if (scaffoldRuntimeInput.modelId === undefined) {
+            throw new RegionUnsupportedFeatureError(LITELLM_MODEL_ID_REQUIRED_CN_MESSAGE);
+          }
+        }
+        createInput = { ...base, scaffoldRuntimeInput };
       }
 
       // Same driver as build and deploy: a live step list in a TTY, and the previous plain

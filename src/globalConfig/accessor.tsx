@@ -53,6 +53,15 @@ export class DefaultGlobalConfigAccessor implements GlobalConfigAccessor {
       configFileData.installationId = DEFAULT_GLOBAL_CONFIG.installationId;
       this.logger.info(`no installationId found, persisting one`);
 
+      // A first run in a China (aws-cn) environment persists telemetry off:
+      // the first-run notice is not shown there (telemetry is disabled), so
+      // without persisting, a later run in a commercial region would flip
+      // telemetry back on without the notice ever having been displayed.
+      if (inChinaRegionEnv() && configFileData.telemetry?.enabled === undefined) {
+        configFileData.telemetry = { ...configFileData.telemetry, enabled: false };
+        this.logger.info(`first run in a China region, persisting telemetry disabled`);
+      }
+
       try {
         await this.writeToConfigFile(configFileData);
       } catch (e) {

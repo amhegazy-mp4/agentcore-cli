@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -664,6 +664,97 @@ describe("FsProjectManager.addResource", () => {
           },
         }),
       ).rejects.toThrow("uv is missing");
+    });
+
+    async function editSpec(
+      project: Project,
+      edit: (spec: {
+        runtimes: { name: string; modelProvider?: string }[];
+        harnesses: unknown[];
+      }) => void,
+    ) {
+      const specPath = join(project.rootPath, "agentcore", "agentcore.json");
+      const spec = JSON.parse(await readFile(specPath, "utf8"));
+      edit(spec);
+      await writeFile(specPath, JSON.stringify(spec, null, 2));
+    }
+
+    async function deployOutcome(subject: FsProjectManager, project: Project) {
+      // Re-resolve so the deploy sees the spec as edited on disk.
+      const fresh = (await subject.resolve({ filePath: project.rootPath }))!;
+      const steps: string[] = [];
+      try {
+        const generator = subject.deploy(fresh, {
+          target: "primary",
+          region: "us-east-1",
+          confirmTeardown: async () => false,
+        });
+        for await (const event of generator) {
+          if (event.type === "step") steps.push(event.message);
+        }
+        return { steps, error: undefined };
+      } catch (error) {
+        return { steps, error };
+      }
+    }
+
+    test("deploy to a China target hard-fails on a persisted commercial model provider", async () => {
+      await inTempDirectory();
+      const { subject, project } = await projectWithTarget("cn-north-1");
+      await editSpec(project, (spec) => {
+        spec.runtimes[0]!.modelProvider = "Bedrock";
+      });
+
+      const { error } = await deployOutcome(subject, project);
+      expect(error).toBeInstanceOf(RegionUnsupportedFeatureError);
+      expect(String(error)).toContain("Cannot deploy to China region cn-north-1");
+      expect(String(error)).toContain("'agent_python_minimal'");
+    });
+
+    test("deploy to a China target proceeds past the gate for LiteLLM", async () => {
+      await inTempDirectory();
+      const { subject, project } = await projectWithTarget("cn-north-1");
+      await editSpec(project, (spec) => {
+        spec.runtimes[0]!.modelProvider = "LiteLLM";
+      });
+
+      const { error } = await deployOutcome(subject, project);
+      expect(error).not.toBeInstanceOf(RegionUnsupportedFeatureError);
+    });
+
+    test("deploy to a China target notes unclassifiable runtimes and proceeds", async () => {
+      await inTempDirectory();
+      const { subject, project } = await projectWithTarget("cn-north-1");
+
+      const { steps, error } = await deployOutcome(subject, project);
+      expect(steps.join("\n")).toContain(
+        "cannot verify the model provider of 'agent_python_minimal'",
+      );
+      expect(error).not.toBeInstanceOf(RegionUnsupportedFeatureError);
+    });
+
+    test("deploy to a China target rejects harness projects", async () => {
+      await inTempDirectory();
+      const { subject, project } = await projectWithTarget("cn-north-1");
+      await editSpec(project, (spec) => {
+        spec.harnesses = [{ name: "example_harness", path: "harness/example" }];
+      });
+
+      const { error } = await deployOutcome(subject, project);
+      expect(error).toBeInstanceOf(RegionUnsupportedFeatureError);
+      expect(String(error)).toContain("Harness projects are not available in China regions");
+    });
+
+    test("deploy to a commercial target skips the China gate entirely", async () => {
+      await inTempDirectory();
+      const { subject, project } = await projectWithTarget("us-west-2");
+      await editSpec(project, (spec) => {
+        spec.runtimes[0]!.modelProvider = "Bedrock";
+      });
+
+      const { steps, error } = await deployOutcome(subject, project);
+      expect(error).not.toBeInstanceOf(RegionUnsupportedFeatureError);
+      expect(steps.join("\n")).not.toContain("cannot verify");
     });
 
     test("lets a model-provider template through for commercial-only targets", async () => {

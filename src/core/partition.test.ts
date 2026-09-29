@@ -47,7 +47,12 @@ describe("isChinaContext", () => {
 
   test("true when the ambient region env var is a China region", async () => {
     process.env.AWS_REGION = "cn-northwest-1";
-    expect(await isChinaContext(directory)).toBe(true);
+    expect(await isChinaContext({ cwd: directory })).toBe(true);
+  });
+
+  test("true when the caller passes a resolved China region", async () => {
+    expect(await isChinaContext({ region: "cn-north-1", cwd: directory })).toBe(true);
+    expect(await isChinaContext({ region: "us-west-2", cwd: directory })).toBe(false);
   });
 
   test("true when the enclosing project declares a China deployment target", async () => {
@@ -55,27 +60,27 @@ describe("isChinaContext", () => {
       { name: "primary", account: "111122223333", region: "us-west-2" },
       { name: "china", account: "111122223333", region: "cn-north-1" },
     ]);
-    expect(await isChinaContext(root)).toBe(true);
+    expect(await isChinaContext({ cwd: root })).toBe(true);
     // The walk finds the project from a nested path as well.
-    expect(await isChinaContext(join(root, "app", "nested"))).toBe(true);
+    expect(await isChinaContext({ cwd: join(root, "app", "nested") })).toBe(true);
   });
 
   test("false for a project with only commercial targets", async () => {
     const root = await projectWithTargets([
       { name: "primary", account: "111122223333", region: "us-west-2" },
     ]);
-    expect(await isChinaContext(root)).toBe(false);
+    expect(await isChinaContext({ cwd: root })).toBe(false);
   });
 
   test("false when no project encloses the directory", async () => {
-    expect(await isChinaContext(directory)).toBe(false);
+    expect(await isChinaContext({ cwd: directory })).toBe(false);
   });
 
   test("false when the targets file is missing or malformed", async () => {
     const noTargets = await projectWithTargets(undefined);
-    expect(await isChinaContext(noTargets)).toBe(false);
+    expect(await isChinaContext({ cwd: noTargets })).toBe(false);
 
     await writeFile(join(noTargets, "agentcore", "aws-targets.json"), "not json");
-    expect(await isChinaContext(noTargets)).toBe(false);
+    expect(await isChinaContext({ cwd: noTargets })).toBe(false);
   });
 });

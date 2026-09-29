@@ -237,7 +237,7 @@ export const createAddRuntimeHandler = (config: AddProjectResourceConfig) =>
         if (deploymentTargets.some((target) => isChinaRegion(target.region))) {
           throw new RegionUnsupportedFeatureError(
             "--type import translates a Bedrock Agent, and Amazon Bedrock is not available in " +
-              "China regions (cn-*).",
+              "China regions (cn-north-1, cn-northwest-1).",
           );
         }
         importBedrockAgent = await resolveImportBedrockAgentInput({

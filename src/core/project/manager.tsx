@@ -101,14 +101,25 @@ const UV_INSTALL_HINT = "Install uv: https://docs.astral.sh/uv/getting-started/i
 /**
  * Shown when a runtime template hardwired to an unreachable model provider
  * targets a China (aws-cn) region. Amazon Bedrock, Anthropic, OpenAI, and
- * Gemini cannot be called from cn-*; LiteLLM can route to a reachable provider.
+ * Gemini cannot be called from China regions; LiteLLM can route to a reachable provider.
  */
 export const MODEL_PROVIDER_RUNTIMES_CN_MESSAGE =
-  "This template's model provider is not accessible from China regions (cn-*): Amazon Bedrock, " +
+  "This template's model provider is not accessible from China regions (cn-north-1, " +
+  "cn-northwest-1): Amazon Bedrock, " +
   "Anthropic, OpenAI, and Gemini cannot be used there. Either scaffold a provider-free runtime " +
   "(--template agent-python-minimal or mcp-python-fastmcp) and bring your own model connectivity, " +
   "or use --template agent-python-strands --model-provider litellm --model-id <model reachable " +
   "from China>.";
+
+/**
+ * Shown when a harness is created in or deployed to a China (aws-cn) region.
+ * Harnesses are not part of the China launch: their model providers and IAM
+ * role generation are not partition-aware there.
+ */
+export const HARNESS_CN_MESSAGE =
+  "Harness projects are not available in China regions (cn-north-1, cn-northwest-1). " +
+  "Scaffold a runtime project " +
+  "instead (e.g. --template agent-python-minimal) or start from --template empty.";
 
 /**
  * Shown when a LiteLLM runtime template targets a China (aws-cn) region without
@@ -116,7 +127,8 @@ export const MODEL_PROVIDER_RUNTIMES_CN_MESSAGE =
  * not available there.
  */
 export const LITELLM_MODEL_ID_REQUIRED_CN_MESSAGE =
-  "--model-provider litellm requires --model-id in China regions (cn-*): the default model id " +
+  "--model-provider litellm requires --model-id in China regions (cn-north-1, " +
+  "cn-northwest-1): the default model id " +
   "routes to Amazon Bedrock, which is not available there. Pass a LiteLLM model id for a " +
   "provider reachable from China (see https://docs.litellm.ai/docs/providers).";
 const GIT_INSTALL_HINT = "Install git: https://git-scm.com/downloads";
@@ -371,6 +383,14 @@ export class FsProjectManager implements ProjectManager {
 
     switch (input.resourceType) {
       case "harness": {
+        // Harnesses are not part of the China launch; reject before scaffolding
+        // when any deployment target is in a China region.
+        {
+          const targets = await this.listTargets(project);
+          if (targets.some((target) => isChinaRegion(target.region))) {
+            throw new RegionUnsupportedFeatureError(HARNESS_CN_MESSAGE);
+          }
+        }
         yield { type: "step", message: `Scaffolding harness in project` };
         const outputPath = join(project.rootPath, "app", input.resourceConfig.name);
         scaffoldedPaths.push(outputPath);
@@ -1053,6 +1073,44 @@ export class FsProjectManager implements ProjectManager {
         `Project '${project.name}' has no deployment target named '${input.target}'. ` +
           `${targetsPath} defines: ${targets.map(({ name }) => name).join(", ")}.`,
       );
+    }
+
+    // China (aws-cn) targets cannot run runtimes whose scaffolded code is
+    // wired to Bedrock/Anthropic/OpenAI/Gemini (unreachable there), nor
+    // harnesses (not part of the China launch). Runtimes without a persisted
+    // modelProvider (BYO, provider-free, hand-edited, or scaffolded by an
+    // older CLI) cannot be classified and only get an informational note.
+    if (isChinaRegion(target.region)) {
+      const blocked = project.spec.runtimes.filter(
+        (runtime) => runtime.modelProvider !== undefined && runtime.modelProvider !== "LiteLLM",
+      );
+      if (blocked.length > 0) {
+        throw new RegionUnsupportedFeatureError(
+          `Cannot deploy to China region ${target.region}: ` +
+            blocked
+              .map((runtime) => `runtime '${runtime.name}' (${runtime.modelProvider})`)
+              .join(", ") +
+            ` scaffolded with a model provider that is not accessible from China regions. ` +
+            `Re-scaffold with '--model-provider litellm --model-id <model reachable from China>' ` +
+            `or bring your own model connectivity. If you have already replaced a runtime's ` +
+            `model wiring in code, delete its 'modelProvider' field from agentcore.json.`,
+        );
+      }
+      if (project.spec.harnesses.length > 0) {
+        throw new RegionUnsupportedFeatureError(HARNESS_CN_MESSAGE);
+      }
+      const unclassified = project.spec.runtimes.filter(
+        (runtime) => runtime.modelProvider === undefined,
+      );
+      if (unclassified.length > 0) {
+        yield {
+          type: "step",
+          message:
+            `Note: cannot verify the model provider of ` +
+            unclassified.map((runtime) => `'${runtime.name}'`).join(", ") +
+            `; Bedrock, Anthropic, OpenAI, and Gemini connectivity does not work in China regions.`,
+        };
+      }
     }
 
     return yield* this.backendFor(project).deploy(project, {

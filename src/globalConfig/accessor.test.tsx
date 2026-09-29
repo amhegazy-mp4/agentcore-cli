@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { DefaultGlobalConfigAccessor } from "./accessor";
@@ -52,5 +52,37 @@ describe("DefaultGlobalConfigAccessor telemetry partition default", () => {
 
     const config = await accessor().get();
     expect(config.telemetry.enabled).toBe(true);
+  });
+
+  test("a first run in a China region persists telemetry disabled", async () => {
+    process.env.AWS_REGION = "cn-north-1";
+    await accessor().get();
+
+    const persisted = JSON.parse(await readFile(configPath, "utf8"));
+    expect(persisted.telemetry).toEqual({ enabled: false });
+
+    // A later run in a commercial region keeps the persisted opt-out — the
+    // first-run notice was never shown, so telemetry must not silently start.
+    delete process.env.AWS_REGION;
+    const config = await accessor().get();
+    expect(config.telemetry.enabled).toBe(false);
+    expect(config.isFirstRun).toBe(false);
+  });
+
+  test("a first commercial run persists only the installation id", async () => {
+    await accessor().get();
+
+    const persisted = JSON.parse(await readFile(configPath, "utf8"));
+    expect(persisted.telemetry).toBeUndefined();
+    expect(persisted.installationId).toBeDefined();
+  });
+
+  test("a first China run does not clobber a pre-seeded explicit opt-in", async () => {
+    process.env.AWS_REGION = "cn-north-1";
+    await writeFile(configPath, JSON.stringify({ telemetry: { enabled: true } }));
+
+    await accessor().get();
+    const persisted = JSON.parse(await readFile(configPath, "utf8"));
+    expect(persisted.telemetry.enabled).toBe(true);
   });
 });
