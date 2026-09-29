@@ -45,6 +45,8 @@ export function mapServiceHarnessToSpec(harness: Harness): {
   spec: HarnessSpec;
   systemPrompt?: string;
   notes: ExportNote[];
+  /** Service model additionalParams, which the local harness spec only holds for lite_llm. */
+  modelAdditionalParams?: Record<string, unknown>;
 } {
   const notes: ExportNote[] = [];
   const promptBlocks = harness.systemPrompt ?? [];
@@ -66,7 +68,7 @@ export function mapServiceHarnessToSpec(harness: Harness): {
 
   const candidate = clean({
     name: harness.harnessName,
-    model: mapModel(harness.model, notes),
+    model: mapModel(harness.model),
     tools: (harness.tools ?? []).map((tool) =>
       clean({
         type: tool.type,
@@ -97,10 +99,16 @@ export function mapServiceHarnessToSpec(harness: Harness): {
       { cause: parsed.error },
     );
   }
-  return { spec: parsed.data, systemPrompt, notes };
+  const { bedrockModelConfig, openAiModelConfig, geminiModelConfig } = harness.model ?? {};
+  const params = (bedrockModelConfig ?? openAiModelConfig ?? geminiModelConfig)?.additionalParams;
+  const modelAdditionalParams =
+    typeof params === "object" && params !== null && !Array.isArray(params)
+      ? (params as Record<string, unknown>)
+      : undefined;
+  return { spec: parsed.data, systemPrompt, notes, modelAdditionalParams };
 }
 
-function mapModel(model: Harness["model"], notes: ExportNote[]): Record<string, unknown> {
+function mapModel(model: Harness["model"]): Record<string, unknown> {
   if (model?.bedrockModelConfig) {
     const c = model.bedrockModelConfig;
     return clean({
@@ -110,7 +118,6 @@ function mapModel(model: Harness["model"], notes: ExportNote[]): Record<string, 
       temperature: c.temperature,
       topP: c.topP,
       maxTokens: c.maxTokens,
-      additionalParams: omitUnsupportedAdditionalParams("bedrock", c.additionalParams, notes),
     });
   }
   if (model?.openAiModelConfig) {
@@ -123,7 +130,6 @@ function mapModel(model: Harness["model"], notes: ExportNote[]): Record<string, 
       temperature: c.temperature,
       topP: c.topP,
       maxTokens: c.maxTokens,
-      additionalParams: omitUnsupportedAdditionalParams("open_ai", c.additionalParams, notes),
     });
   }
   if (model?.geminiModelConfig) {
@@ -136,7 +142,6 @@ function mapModel(model: Harness["model"], notes: ExportNote[]): Record<string, 
       topP: c.topP,
       topK: c.topK,
       maxTokens: c.maxTokens,
-      additionalParams: omitUnsupportedAdditionalParams("gemini", c.additionalParams, notes),
     });
   }
   if (model?.liteLlmModelConfig) {
@@ -155,27 +160,6 @@ function mapModel(model: Harness["model"], notes: ExportNote[]): Record<string, 
   throw new MalformedServiceResponseError(
     "The fetched harness has no recognized model configuration.",
   );
-}
-
-/**
- * Only lite_llm carries additionalParams through to CFN — the CDK's harness schema rejects the
- * field on every other provider, so mapping it verbatim would produce a spec that fails at synth.
- * Drop it with a note instead of writing an undeployable harness.
- */
-function omitUnsupportedAdditionalParams(
-  provider: "bedrock" | "open_ai" | "gemini",
-  value: unknown,
-  notes: ExportNote[],
-): undefined {
-  if (value === undefined) return undefined;
-  notes.push({
-    category: SERVICE_FIELD_OMITTED_NOTE_CATEGORY,
-    message:
-      `The harness model's additionalParams were omitted because they are only supported for ` +
-      `the "lite_llm" provider (this harness uses "${provider}"). Set the equivalent options ` +
-      `directly in the generated model/load.py if the exported agent needs them.`,
-  });
-  return undefined;
 }
 
 /** Service skill union -> the flat local skill shape. */

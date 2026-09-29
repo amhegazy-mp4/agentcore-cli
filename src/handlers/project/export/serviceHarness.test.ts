@@ -284,8 +284,8 @@ describe("mapServiceHarnessToSpec", () => {
   // The pinned CDK only maps additionalParams for lite_llm, so carrying it on another provider
   // would produce a harness.yaml that fails at synth. The lite_llm keep-path is already asserted
   // by "maps openai and litellm model configs" above.
-  test("notes additionalParams the CDK cannot map", () => {
-    const { spec, notes } = mapServiceHarnessToSpec(
+  test("keeps model settings the local spec cannot hold for the export", () => {
+    const bedrock = mapServiceHarnessToSpec(
       serviceHarness({
         model: {
           bedrockModelConfig: {
@@ -295,9 +295,24 @@ describe("mapServiceHarnessToSpec", () => {
         },
       } as Partial<Harness>),
     );
+    // The spec feeds deploy, whose schema rejects the field outside lite_llm.
+    expect(bedrock.spec.model.additionalParams).toBeUndefined();
+    expect(bedrock.modelAdditionalParams).toEqual({ custom_parameter: true });
+    expect(bedrock.notes).toEqual([]);
 
-    expect(spec.model.additionalParams).toBeUndefined();
-    expect(notes.map((note) => note.category)).toEqual([SERVICE_FIELD_OMITTED_NOTE_CATEGORY]);
+    const openAi = mapServiceHarnessToSpec(
+      serviceHarness({
+        model: {
+          openAiModelConfig: {
+            modelId: "gpt-5",
+            apiKeyArn:
+              "arn:aws:bedrock-agentcore:us-west-2:111122223333:token-vault/default/apikeycredentialprovider/openai",
+            additionalParams: { reasoning: { effort: "low" } },
+          },
+        },
+      } as Partial<Harness>),
+    );
+    expect(openAi.modelAdditionalParams).toEqual({ reasoning: { effort: "low" } });
   });
 
   test("notes external-memory tuning that cannot be wired automatically", () => {

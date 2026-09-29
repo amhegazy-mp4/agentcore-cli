@@ -1,5 +1,8 @@
 {{#if (eq modelProvider "Bedrock")}}
 {{#if bedrockMantle}}
+{{#if modelAdditionalParams}}
+import json
+{{/if}}
 import os
 
 from aws_bedrock_token_generator import provide_token
@@ -34,7 +37,7 @@ def load_model():
     {{/if}}
     client_args = {"api_key": token, "base_url": base_url}
 
-    params = {}
+    params = {{#if modelAdditionalParams}}json.loads({{pyJsonStr modelAdditionalParams}}){{else}}{}{{/if}}
     {{#if modelMaxTokens}}
     {{#if (eq mantleApiFormat "chat_completions")}}
     params["max_completion_tokens"] = {{modelMaxTokens}}
@@ -60,6 +63,9 @@ def load_model():
     {{/if}}
     {{/if}}
 {{else}}
+{{#if modelAdditionalParams}}
+import json
+{{/if}}
 from strands.models.bedrock import BedrockModel
 
 
@@ -76,10 +82,16 @@ def load_model() -> BedrockModel:
 {{#if modelTopP}}
         top_p={{modelTopP}},
 {{/if}}
+{{#if modelAdditionalParams}}
+        additional_args=json.loads({{pyJsonStr modelAdditionalParams}}),
+{{/if}}
     )
 {{/if}}
 {{/if}}
 {{#if (eq modelProvider "OpenAI")}}
+{{#if modelAdditionalParams}}
+import json
+{{/if}}
 import os
 
 {{#if (eq modelApiFormat "responses")}}
@@ -116,7 +128,7 @@ def _get_api_key() -> str:
 
 def load_model():
     """Get authenticated OpenAI model client."""
-    params = {}
+    params = {{#if modelAdditionalParams}}json.loads({{pyJsonStr modelAdditionalParams}}){{else}}{}{{/if}}
     {{#if modelMaxTokens}}
     params["{{#if (eq modelApiFormat "responses")}}max_output_tokens{{else}}max_completion_tokens{{/if}}"] = {{modelMaxTokens}}
     {{/if}}
@@ -133,6 +145,9 @@ def load_model():
     )
 {{/if}}
 {{#if (eq modelProvider "Gemini")}}
+{{#if modelAdditionalParams}}
+import json
+{{/if}}
 import os
 
 from strands.models.gemini import GeminiModel
@@ -165,7 +180,7 @@ def _get_api_key() -> str:
 
 def load_model() -> GeminiModel:
     """Get authenticated Gemini model client."""
-    params = {}
+    params = {{#if modelAdditionalParams}}json.loads({{pyJsonStr modelAdditionalParams}}){{else}}{}{{/if}}
     {{#if modelMaxTokens}}
     params["max_output_tokens"] = {{modelMaxTokens}}
     {{/if}}
@@ -186,7 +201,7 @@ def load_model() -> GeminiModel:
 {{/if}}
 {{#if (eq modelProvider "LiteLLM")}}
 import os
-{{#if litellmAdditionalParams}}
+{{#if modelAdditionalParams}}
 import json
 {{/if}}
 
@@ -231,7 +246,7 @@ def load_model() -> LiteLLMModel:
     {{#if litellmApiBase}}
     client_args["api_base"] = {{safeJson litellmApiBase}}
     {{/if}}
-    params = {{#if litellmAdditionalParams}}json.loads({{pyJsonStr litellmAdditionalParams}}){{else}}{}{{/if}}
+    params = {{#if modelAdditionalParams}}json.loads({{pyJsonStr modelAdditionalParams}}){{else}}{}{{/if}}
     {{#if modelMaxTokens}}
     params["max_tokens"] = {{modelMaxTokens}}
     {{/if}}

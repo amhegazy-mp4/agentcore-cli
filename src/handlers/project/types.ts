@@ -366,6 +366,7 @@ export type ExportHarnessInput = {
     spec: z.output<typeof HarnessSpecSchema>;
     systemPrompt?: string;
     notes?: ExportNote[];
+    modelAdditionalParams?: Record<string, unknown>;
   };
   /** Name of the runtime agent to generate. */
   targetAgentName: string;

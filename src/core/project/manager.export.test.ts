@@ -86,6 +86,45 @@ function exportInput(overrides: Partial<ExportHarnessInput> = {}): ExportHarness
 }
 
 describe("FsProjectManager.exportHarness rendered tree", () => {
+  test("loads only the MCP tools allowedTools selects", async () => {
+    const { manager: subject } = manager();
+    const project = await projectWithHarness(subject, {
+      allowedTools: ["@exa/web_*"],
+      tools: [
+        {
+          type: "remote_mcp",
+          name: "exa",
+          config: { remoteMcp: { url: "https://mcp.exa.ai/mcp" } },
+        },
+      ],
+    });
+
+    const result = await drain(subject.exportHarness(project, exportInput()));
+
+    const client = await Bun.file(join(result.agentPath, "mcp_client", "client.py")).text();
+    expect(client).toContain('tool_filters=_allowed_tools("exa", "web_*")');
+  });
+
+  test("merges service model parameters under the explicit settings", async () => {
+    const { manager: subject } = manager();
+    const project = await projectWithHarness(subject);
+    const spec = HarnessSpecSchema.parse({
+      name: "remote",
+      model: { provider: "bedrock", modelId: "us.amazon.nova-lite-v1:0", temperature: 0.2 },
+    });
+
+    const result = await drain(
+      subject.exportHarness(project, {
+        prefetched: { spec, modelAdditionalParams: { top_k: 5 } },
+        targetAgentName: "remoteAgent",
+      }),
+    );
+
+    const loadModel = await Bun.file(join(result.agentPath, "model", "load.py")).text();
+    expect(loadModel).toContain("additional_args=json.loads(");
+    expect(loadModel).toContain("top_k");
+  });
+
   test("renders invocation-scoped native Strands limits without a custom hook", async () => {
     const { manager: subject } = manager();
     const project = await projectWithHarness(subject, {

@@ -183,11 +183,40 @@ describe("mapHarnessToExportPlan model mapping", () => {
     expect(result.context.modelProvider).toBe("LiteLLM");
     expect(result.context.strandsExtras).toBe("litellm");
     expect(result.context.litellmApiBase).toBe("https://litellm.example");
-    expect(result.context.litellmAdditionalParams).toEqual({ max_retries: 2 });
+    expect(result.context.modelAdditionalParams).toEqual({ max_retries: 2 });
     expect(result.context.modelMaxTokens).toBe("300");
     expect(result.context.modelTemperature).toBe("0.1");
     expect(result.context.modelTopP).toBe("0.7");
     expect(result.notes).toEqual([]);
+  });
+
+  test("grants bedrock:ApplyGuardrail when the model parameters set a guardrail", () => {
+    const guarded = (guardrailIdentifier: string) =>
+      plan({
+        modelAdditionalParams: { guardrailConfig: { guardrailIdentifier, guardrailVersion: "1" } },
+      }).policyFiles["bedrock-guardrail-policy.json"];
+    expect(guarded("gr-123")).toEqual({
+      Version: "2012-10-17",
+      Statement: [
+        {
+          Effect: "Allow",
+          Action: "bedrock:ApplyGuardrail",
+          Resource: "arn:aws:bedrock:*:*:guardrail/gr-123",
+        },
+      ],
+    });
+    const arn = "arn:aws:bedrock:us-east-1:111122223333:guardrail/gr-123";
+    expect(guarded(arn)).toMatchObject({ Statement: [{ Resource: arn }] });
+    expect(plan({}).policyFiles["bedrock-guardrail-policy.json"]).toBeUndefined();
+  });
+
+  test("threads service-only model parameters into the render context", () => {
+    const result = plan({
+      modelAdditionalParams: { performanceConfig: { latency: "optimized" } },
+    });
+    expect(result.context.modelAdditionalParams).toEqual({
+      performanceConfig: { latency: "optimized" },
+    });
   });
 
   test("warns when a keyless LiteLLM model is not Bedrock-backed", () => {
@@ -353,7 +382,7 @@ describe("mapHarnessToExportPlan tools", () => {
 
     const restricted = plan({
       spec: harness({
-        allowedTools: ["@builtin/shell", "exa"],
+        allowedTools: ["@builtin/shell", "@exa"],
         tools: [
           {
             type: "remote_mcp",
@@ -382,18 +411,85 @@ describe("mapHarnessToExportPlan tools", () => {
   });
 });
 
+describe("mapHarnessToExportPlan allowedTools selection", () => {
+  test("a bare name or glob selects builtins only", () => {
+    const shellOnly = plan({ spec: harness({ allowedTools: ["shell"] }) });
+    expect(shellOnly.context.hasShell).toBe(true);
+    expect(shellOnly.context.hasFileOperations).toBe(false);
+
+    const fileGlob = plan({ spec: harness({ allowedTools: ["file_*"] }) });
+    expect(fileGlob.context.hasShell).toBe(false);
+    expect(fileGlob.context.hasFileOperations).toBe(true);
+  });
+
+  test("keeps an MCP server that @server or * allows and drops it otherwise", () => {
+    const exa = {
+      type: "remote_mcp",
+      name: "exa",
+      config: { remoteMcp: { url: "https://mcp.exa.ai/mcp" } },
+    };
+    const servers = (allowedTools: string[]) =>
+      (
+        plan({ spec: harness({ tools: [exa], allowedTools }) }).context.remoteMcpTools as
+          { name: string }[] | undefined
+      )?.map((tool) => tool.name);
+    expect(servers(["*"])).toEqual(["exa"]);
+    expect(servers(["@exa"])).toEqual(["exa"]);
+    expect(servers(["@e*/search"])).toEqual(["exa"]);
+    // A bare pattern selects builtins only.
+    expect(servers(["exa"])).toBeUndefined();
+    expect(servers(["@other"])).toBeUndefined();
+  });
+
+  test("narrows an MCP server to the tools @server/tool selects", () => {
+    const exa = {
+      type: "remote_mcp",
+      name: "exa",
+      config: { remoteMcp: { url: "https://mcp.exa.ai/mcp" } },
+    };
+    const patterns = (allowedTools: string[]) =>
+      (
+        plan({ spec: harness({ tools: [exa], allowedTools }) }).context.remoteMcpTools as
+          { toolPatterns?: string[] }[] | undefined
+      )?.map((tool) => tool.toolPatterns);
+    expect(patterns(["@exa/search", "@e*/web_*"])).toEqual([["search", "web_*"]]);
+    expect(patterns(["@exa", "@exa/search"])).toEqual([undefined]);
+    expect(patterns(["*"])).toEqual([undefined]);
+  });
+
+  test("selects an inline function by @name, not by its bare name", () => {
+    const inline = {
+      type: "inline_function",
+      name: "lookup",
+      config: { inlineFunction: { description: "d", inputSchema: { type: "object" } } },
+    };
+    const names = (allowedTools: string[]) =>
+      (
+        plan({ spec: harness({ tools: [inline], allowedTools }) }).context.inlineFunctionTools as
+          { name: string }[] | undefined
+      )?.map((tool) => tool.name);
+    expect(names(["@lookup"])).toEqual(["lookup"]);
+    expect(names(["lookup"])).toBeUndefined();
+  });
+});
+
 describe("matchesAllowedTools", () => {
   test.each([
-    ["*", "anything", true],
-    ["exa", "exa", true],
-    ["e*", "exa", true],
-    ["@builtin/shell", "builtin/shell", true],
-    ["@builtin", "builtin/shell", true],
-    ["@server/tool", "server_tool", true],
-    ["exa", "other", false],
-    ["@builtin/shell", "builtin/file_operations", false],
-  ])("pattern %s vs %s -> %p", (pattern, name, expected) => {
-    expect(matchesAllowedTools(name, [pattern])).toBe(expected);
+    ["*", "exa", "search", true],
+    // A bare pattern is a glob over builtin names only.
+    ["shell", "builtin", "shell", true],
+    ["file_*", "builtin", "file_operations", true],
+    ["exa", "exa", "exa", false],
+    ["@builtin", "builtin", "shell", true],
+    ["@builtin/shell", "builtin", "file_operations", false],
+    // "@server" allows every tool of a server; "@server/tool" globs its tools.
+    ["@exa", "exa", "search", true],
+    ["@e*", "exa", "search", true],
+    ["@exa/web_*", "exa", "web_search", true],
+    ["@exa/web_*", "exa", "crawl", false],
+    ["@exa", "builtin", "shell", false],
+  ])("pattern %s vs %s/%s -> %p", (pattern, server, tool, expected) => {
+    expect(matchesAllowedTools(server, tool, [pattern])).toBe(expected);
   });
 });
 

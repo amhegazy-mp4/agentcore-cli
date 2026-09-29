@@ -50,6 +50,8 @@ export interface HarnessExportInput {
   projectSpec: ProjectSpec;
   /** Notes collected while converting a service response into a local harness spec. */
   sourceNotes?: ExportNote[];
+  /** Service model additionalParams, which the local harness spec only holds for lite_llm. */
+  modelAdditionalParams?: Record<string, unknown>;
 }
 
 /** The pure mapping result; the project manager executes it against the filesystem. */
@@ -139,7 +141,7 @@ export function mapHarnessToExportPlan(input: HarnessExportInput): HarnessExport
     });
   }
 
-  const model = resolveModel(spec, projectSpec, credentials, notes);
+  const model = resolveModel(spec, projectSpec, credentials, notes, input.modelAdditionalParams);
   const memory = resolveMemory(spec, projectSpec, notes);
   const tools = resolveTools(
     spec,
@@ -284,11 +286,16 @@ function resolveModel(
   projectSpec: ProjectSpec,
   credentials: Credential[],
   notes: ExportNote[],
+  serviceAdditionalParams: Record<string, unknown> | undefined,
 ): ModelResolution {
   const model = spec.model;
+  const additionalParams = serviceAdditionalParams ?? model.additionalParams;
   const context: Record<string, unknown> = {
     modelId: model.modelId,
     modelApiFormat: model.apiFormat,
+    // Provider-specific parameters, passed through to the model provider unchanged.
+    modelAdditionalParams:
+      additionalParams && Object.keys(additionalParams).length > 0 ? additionalParams : undefined,
     // Stringified so a legal 0 (temperature/topP) stays truthy for {{#if}}.
     modelMaxTokens: model.maxTokens !== undefined ? String(model.maxTokens) : undefined,
     modelTemperature: model.temperature !== undefined ? String(model.temperature) : undefined,
@@ -330,7 +337,28 @@ function resolveModel(
           },
         };
       }
-      return { context };
+      const guardrail = (additionalParams?.guardrailConfig as { guardrailIdentifier?: unknown })
+        ?.guardrailIdentifier;
+      if (typeof guardrail !== "string") return { context };
+      // A guardrail in the request needs bedrock:ApplyGuardrail, which the default grant lacks.
+      return {
+        context,
+        policyFile: {
+          name: "bedrock-guardrail-policy.json",
+          doc: {
+            Version: "2012-10-17",
+            Statement: [
+              {
+                Effect: "Allow",
+                Action: "bedrock:ApplyGuardrail",
+                Resource: guardrail.startsWith("arn:")
+                  ? guardrail
+                  : `arn:aws:bedrock:*:*:guardrail/${guardrail}`,
+              },
+            ],
+          },
+        },
+      };
     }
     case "open_ai":
     case "gemini": {
@@ -351,9 +379,6 @@ function resolveModel(
       context.modelProvider = "LiteLLM";
       context.strandsExtras = "litellm";
       if (model.apiBase) context.litellmApiBase = model.apiBase;
-      if (model.additionalParams && Object.keys(model.additionalParams).length > 0) {
-        context.litellmAdditionalParams = model.additionalParams;
-      }
       if (model.apiKeyArn) {
         attachIdentityProvider(
           context,
@@ -508,6 +533,8 @@ interface ToolsResolution {
     name: string;
     pythonName: string;
     url: string;
+    /** Tool patterns from `@server/tool` selectors; undefined loads every tool of the server. */
+    toolPatterns?: string[];
     headerCredentials?: {
       headerKey: string;
       credentialName: string;
@@ -537,7 +564,11 @@ function resolveTools(
   };
 
   for (const tool of spec.tools) {
-    if (!matchesAllowedTools(tool.name, allowedPatterns)) continue;
+    const allowed =
+      tool.type === "inline_function"
+        ? matchesAllowedTools(tool.name, tool.name, allowedPatterns)
+        : isServerAllowed(tool.name, allowedPatterns);
+    if (!allowed) continue;
 
     switch (tool.type) {
       case "inline_function": {
@@ -603,6 +634,7 @@ function resolveTools(
           pythonName: toolPythonName,
           url: cfg.url,
           headerCredentials,
+          toolPatterns: serverToolPatterns(tool.name, allowedPatterns),
         });
         break;
       }
@@ -880,34 +912,56 @@ function resolveTruncationConfig(
 // allowedTools matching (mirrors the harness runtime's _matches() semantics)
 // ============================================================================
 
-export function matchesAllowedTools(toolName: string, patterns: string[]): boolean {
+/**
+ * Whether allowedTools allows `tool` from `server`: builtins are served by "builtin", and each
+ * customer tool by its harness tool name. A bare pattern is a glob over builtin names ("shell",
+ * "file_*"); "@server" and "@server/tool" glob a server and its tools; "*" allows everything.
+ */
+export function matchesAllowedTools(server: string, tool: string, patterns: string[]): boolean {
   if (patterns.includes("*")) return true;
-  for (const pattern of patterns) {
-    if (pattern === toolName) return true;
-    if (pattern.startsWith("@")) {
-      const slashIdx = pattern.indexOf("/", 1);
-      const pServer = slashIdx === -1 ? pattern.slice(1) : pattern.slice(1, slashIdx);
-      const pTool = slashIdx === -1 ? "*" : pattern.slice(slashIdx + 1);
-      const slashInName = toolName.indexOf("/");
-      if (slashInName === -1) {
-        // MCP tools stored as "server_tool" flat names — keep legacy behaviour
-        if (fnmatch(`${pServer}_${pTool}`, toolName)) return true;
-      } else {
-        // Qualified names like "builtin/shell"
-        const nameServer = toolName.slice(0, slashInName);
-        const nameTool = toolName.slice(slashInName + 1);
-        if (fnmatch(pServer, nameServer) && fnmatch(pTool, nameTool)) return true;
-      }
-    } else if (fnmatch(pattern, toolName)) {
-      return true;
-    }
-  }
-  return false;
+  return patterns.some((pattern) => {
+    const [pServer, pTool] = pattern.startsWith("@")
+      ? splitServerPattern(pattern)
+      : ["builtin", pattern];
+    return fnmatch(pServer, server) && fnmatch(pTool, tool);
+  });
 }
 
-/** Builtins are keyed as "builtin/<name>": only @builtin or @builtin/<name> patterns match. */
+/**
+ * Whether allowedTools allows any tool from `server`. A server's tools are only known at runtime,
+ * so an MCP server is narrowed to them when it loads (see serverToolPatterns).
+ */
+function isServerAllowed(server: string, patterns: string[]): boolean {
+  if (patterns.includes("*")) return true;
+  return patterns.some(
+    (pattern) => pattern.startsWith("@") && fnmatch(splitServerPattern(pattern)[0], server),
+  );
+}
+
+/** The tool patterns `@server/tool` selectors name, or undefined when all tools are allowed. */
+function serverToolPatterns(server: string, patterns: string[]): string[] | undefined {
+  const toolPatterns: string[] = [];
+  for (const pattern of patterns) {
+    if (pattern === "*") return undefined;
+    if (!pattern.startsWith("@")) continue;
+    const [pServer, pTool] = splitServerPattern(pattern);
+    if (!fnmatch(pServer, server)) continue;
+    if (pTool === "*") return undefined;
+    toolPatterns.push(pTool);
+  }
+  return toolPatterns;
+}
+
 function isBuiltinIncluded(builtinName: string, patterns: string[]): boolean {
-  return matchesAllowedTools(`builtin/${builtinName}`, patterns);
+  return matchesAllowedTools("builtin", builtinName, patterns);
+}
+
+/** Split "@server/tool" into its server and tool globs; "@server" allows every tool. */
+function splitServerPattern(pattern: string): [string, string] {
+  const slash = pattern.indexOf("/");
+  return slash === -1
+    ? [pattern.slice(1), "*"]
+    : [pattern.slice(1, slash), pattern.slice(slash + 1)];
 }
 
 function fnmatch(pattern: string, str: string): boolean {

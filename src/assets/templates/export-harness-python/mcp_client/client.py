@@ -6,6 +6,18 @@ from strands.tools.mcp.mcp_client import MCPClient
 logger = logging.getLogger(__name__)
 
 {{#if remoteMcpTools}}
+{{#if (some remoteMcpTools "toolPatterns")}}
+import fnmatch
+
+
+def _allowed_tools(server, *patterns):
+    """Load only the tools allowedTools selects, by the server's name or as <server>_<tool>."""
+    def allowed(tool, **_):
+        names = (tool.mcp_tool.name, f"{server}_{tool.mcp_tool.name}")
+        return any(fnmatch.fnmatchcase(name, pattern) for name in names for pattern in patterns)
+    return {"allowed": [allowed]}
+
+{{/if}}
 {{#if (some remoteMcpTools "headerCredentials")}}
 from bedrock_agentcore.identity.auth import requires_api_key
 {{/if}}
@@ -30,9 +42,9 @@ def get_{{pythonName}}_mcp_client() -> MCPClient | None:
             headers = { {{#each headerCredentials}}{{safeJson headerKey}}: _get_{{pythonName}}_key(){{#unless @last}}, {{/unless}}{{/each}} }
         return streamablehttp_client(url, headers=headers)
 
-    return MCPClient(transport)
+    return MCPClient(transport{{#if toolPatterns}}, tool_filters=_allowed_tools({{safeJson name}}, {{#each toolPatterns}}{{safeJson this}}{{#unless @last}}, {{/unless}}{{/each}}){{/if}})
     {{else}}
-    return MCPClient(lambda: streamablehttp_client(url))
+    return MCPClient(lambda: streamablehttp_client(url){{#if toolPatterns}}, tool_filters=_allowed_tools({{safeJson name}}, {{#each toolPatterns}}{{safeJson this}}{{#unless @last}}, {{/unless}}{{/each}}){{/if}})
     {{/if}}
 
 {{/each}}

@@ -977,6 +977,7 @@ export class FsProjectManager implements ProjectManager {
       systemPrompt,
       projectSpec,
       sourceNotes: input.prefetched?.notes,
+      modelAdditionalParams: input.prefetched?.modelAdditionalParams,
     });
 
     yield { type: "step", message: `Rendering agent code at 'app/${targetAgentName}'` };
